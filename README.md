@@ -1,10 +1,13 @@
 # data-sdk
 
 ## Integration w/ Jupyter
+
+In your first block, you are required to install this repo via pip.
 ```
 !pip install git+https://github.com/lawrence910426/data-sdk.git
 ```
 
+Then, you may now import the classes and use the data.
 ```
 from data_sdk import FinMindWrapper, ShioajiWrapper
 
