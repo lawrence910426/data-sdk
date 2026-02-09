@@ -47,6 +47,7 @@ class ShioajiWrapper:
                 contract=ShioajiWrapper._api.Contracts.Stocks[sid], 
                 date=str(day)
             )
+            print(f"Downloading {sid} {day}")
             print(ShioajiWrapper._api.usage())
             df = pd.DataFrame({**ticks})
             
