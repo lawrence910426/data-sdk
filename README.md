@@ -1,10 +1,24 @@
 # data-sdk
 
+## Integration w/ Jupyter
+```
+!pip install git+https://github.com/lawrence910426/data-sdk.git
+```
+
+```
+from data_sdk import FinMindWrapper, ShioajiWrapper
+
+shioaji_wrapper = ShioajiWrapper()
+finmind_wrapper = FinMindWrapper()
+
+# ...
+```
+
 ## Installation
 
 1.  Clone the repository:
     ```bash
-    git clone <repo_url>
+    git clone https://github.com/lawrence910426/data-sdk.git
     cd data-sdk
     ```
 
