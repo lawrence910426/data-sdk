@@ -4,7 +4,7 @@
 
 In your first block, you are required to install this repo via pip.
 ```
-!pip install git+https://github.com/lawrence910426/data-sdk.git
+!pip install git+https://github.com/lawrence910426/data-sdk.git --force-reinstall
 ```
 
 Then, you may now import the classes and use the data.
