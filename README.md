@@ -8,7 +8,7 @@ In your first block, you are required to install this repo via pip.
 ```
 
 Then, you may now import the classes and use the data.
-```
+```python
 from data_sdk import FinMindWrapper, ShioajiWrapper
 
 shioaji_wrapper = ShioajiWrapper()
