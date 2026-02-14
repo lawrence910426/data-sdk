@@ -1,4 +1,4 @@
-src/shioaji_transfer.py
+shioaji_transfer.py
 __pycache__
 build
 *.egg-info

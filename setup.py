@@ -2,11 +2,12 @@ from setuptools import setup, find_packages
 
 setup(
     name="data-sdk",
-    version="0.1.0",
-    packages=["data_sdk", "data_sdk.crawlers"],
+    version="0.2.0",
+    packages=["data_sdk", "data_sdk.crawlers", "data_sdk.wrappers"],
     package_dir={"data_sdk": "src"},
     install_requires=[
         "pandas",
+        "polars",
         "FinMind",
         "shioaji",
         "requests",

@@ -9,12 +9,14 @@ In your first block, you are required to install this repo via pip.
 
 Then, you may now import the classes and use the data.
 ```python
-from data_sdk import FinMindWrapper, ShioajiWrapper
+from data_sdk import FinMindWrapper, ShioajiWrapper, get_order_book_stocks, get_order_book_odd_lots, get_order_book_warrant
 
 shioaji_wrapper = ShioajiWrapper()
 finmind_wrapper = FinMindWrapper()
 
-# ...
+df_ob = get_order_book_stocks("2026-01-02", is_twse=True, sid="2330")
+df_odd = get_order_book_odd_lots("2026-01-02", is_twse=True, sid="2330")
+df_warrant = get_order_book_warrant("2026-01-02", is_twse=True)
 ```
 
 ## Installation
@@ -46,6 +48,7 @@ If not set, they default to the current working directory.
 ```bash
 export DATA_SDK_FINMIND_BROKER_PATH="/mnt/nfs/backup/finmind_broker"
 export DATA_SDK_SHIOAJI_TICKS_PATH="/mnt/nfs/backup/shioaji_ticks"
+export DATA_SDK_ORDER_BOOK_PARQUET_PATH="/mnt/nfs/backup/parquets"
 ```
 
 ### API Keys
@@ -62,7 +65,7 @@ export SHIOAJI_SECRET_KEY=your_secret_key
 ### Wrappers
 
 ```python
-from data_sdk import FinMindWrapper, ShioajiWrapper
+from data_sdk import FinMindWrapper, ShioajiWrapper, get_order_book_stocks, get_order_book_odd_lots, get_order_book_warrant
 
 # Get FinMind broker data (downloads if missing)
 finmind = FinMindWrapper()
@@ -71,6 +74,12 @@ df = finmind.get_broker("2024-01-02", "2330")
 # Get Shioaji order book data (downloads if missing)
 shioaji = ShioajiWrapper()
 df_ticks = shioaji.get_order_book("2024-01-02", "2330")
+
+# Order book from parquet (requires DATA_SDK_ORDER_BOOK_PARQUET_PATH)
+df_ob = get_order_book_stocks("2026-01-02", is_twse=True, sid="2330")
+df_ob_day = get_order_book_stocks("2026-01-02", is_twse=True)  # entire day
+df_odd = get_order_book_odd_lots("2026-01-02", is_twse=True, sid="2330")
+df_warrant = get_order_book_warrant("2026-01-02", is_twse=True)  # warrant order book (entire day)
 ```
 
 ### Crawlers
