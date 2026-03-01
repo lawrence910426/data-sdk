@@ -82,6 +82,37 @@ df_odd = get_order_book_odd_lots("2026-01-02", is_twse=True, sid="2330")
 df_warrant = get_order_book_warrant("2026-01-02", is_twse=True)  # warrant order book (entire day)
 ```
 
+### Use LazyFrame for parquet reads (recommended)
+
+When reading order-book parquet files, prefer `lazy=True` so the SDK returns a Polars `LazyFrame`.
+This is recommended because it can significantly reduce parquet I/O by pushing filters/projections down to the parquet scan before materialization.
+
+```python
+from data_sdk import get_order_book_stocks
+import polars as pl
+
+# Return LazyFrame instead of eager pandas DataFrame
+lf = get_order_book_stocks("2026-01-02", is_twse=True, lazy=True)
+
+# Apply additional filters/columns lazily, then collect only when needed
+df = (
+    lf.filter(
+        (pl.col("stock_code") == "2330")
+        & (pl.col("match_time") > "13:25:00.00000")
+    )
+      .select(["match_time", "stock_code", "bid_price", "ask_price"])
+      .collect()
+      .to_pandas()
+)
+```
+
+If you already know the stock id, you can also pass `sid` directly to reduce scanned data:
+
+```python
+lf = get_order_book_stocks("2026-01-02", is_twse=True, sid="2330", lazy=True)
+df = lf.collect().to_pandas()
+```
+
 ### Crawlers
 
 ```python
