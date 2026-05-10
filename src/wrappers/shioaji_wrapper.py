@@ -27,32 +27,36 @@ class ShioajiWrapper:
                 pass
             ShioajiWrapper._api = None
 
+    def _download_ticks_to_parquet(self, day, sid, dest_path: Path, data_dir: Path) -> pd.DataFrame:
+        if ShioajiWrapper._api is None:
+            raise RuntimeError("Shioaji API is not initialized.")
+
+        ticks = ShioajiWrapper._api.ticks(
+            contract=ShioajiWrapper._api.Contracts.Stocks[sid],
+            date=str(day),
+        )
+        print(f"Downloading {sid} {day}")
+        print(ShioajiWrapper._api.usage())
+        df = pd.DataFrame({**ticks})
+        data_dir.mkdir(parents=True, exist_ok=True)
+        df.to_parquet(dest_path)
+        return df
+
     def get_order_book(self, day, sid):
         # Determine parquet path
         data_dir = Path(os.environ.get("DATA_SDK_SHIOAJI_TICKS_PATH", "."))
         if not os.environ.get("DATA_SDK_SHIOAJI_TICKS_PATH"):
             print("Warning: DATA_SDK_SHIOAJI_TICKS_PATH not set. Using current directory.", file=sys.stderr)
-            
+
         dest_path = data_dir / f"{sid}_{day}.parquet"
 
-        # Check if parquet exists
         if dest_path.exists():
-            df = pd.read_parquet(dest_path)
-        else:
-            # Download if not exists
-            if ShioajiWrapper._api is None:
-                 raise RuntimeError("Shioaji API is not initialized.")
+            if dest_path.stat().st_size == 0:
+                dest_path.unlink(missing_ok=True)
+            else:
+                try:
+                    return pd.read_parquet(dest_path)
+                except Exception:
+                    dest_path.unlink(missing_ok=True)
 
-            ticks = ShioajiWrapper._api.ticks(
-                contract=ShioajiWrapper._api.Contracts.Stocks[sid], 
-                date=str(day)
-            )
-            print(f"Downloading {sid} {day}")
-            print(ShioajiWrapper._api.usage())
-            df = pd.DataFrame({**ticks})
-            
-            # Save to parquet (raw data)
-            data_dir.mkdir(parents=True, exist_ok=True)
-            df.to_parquet(dest_path)
-        
-        return df
+        return self._download_ticks_to_parquet(day, sid, dest_path, data_dir)
