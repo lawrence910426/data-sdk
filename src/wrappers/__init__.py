@@ -5,6 +5,7 @@ from .order_book_wrapper import (
     get_order_book_odd_lots,
     get_order_book_warrant,
 )
+from .warrant_info_wrapper import WarrantInfoWrapper
 
 __all__ = [
     "FinMindWrapper",
@@ -12,4 +13,5 @@ __all__ = [
     "get_order_book_stocks",
     "get_order_book_odd_lots",
     "get_order_book_warrant",
+    "WarrantInfoWrapper",
 ]

@@ -107,9 +107,10 @@ def get_order_book_odd_lots(
 def get_order_book_warrant(
     day: str,
     is_twse: bool,
+    sid: Optional[str] = None,
     lazy: bool = False,
 ) -> Union[pd.DataFrame, pl.LazyFrame]:
-    """Load order book (warrant) from parquet for a given day.
+    """Load order book (warrant) from parquet for a given day, optionally filtered by warrant code.
 
     Parquet path is taken from DATA_SDK_ORDER_BOOK_PARQUET_PATH.
     Files are named twse_warranty_YYYYMMDD_0825_all.parquet (TWSE) or otc_warranty_YYYYMMDD_0825_all.parquet (OTC).
@@ -117,6 +118,7 @@ def get_order_book_warrant(
     Args:
         day: Trading day, e.g. "2026-02-11" or "20260211".
         is_twse: True for TWSE, False for OTC.
+        sid: Warrant code. If None, returns the entire day for all warrants.
         lazy: If True, return a polars LazyFrame; otherwise collect and return pandas DataFrame.
 
     Returns:
@@ -128,6 +130,8 @@ def get_order_book_warrant(
     path = base / f"{prefix}_{day_plain}_0825_all.parquet"
 
     df_lazy = pl.scan_parquet(str(path))
+    if sid is not None:
+        df_lazy = df_lazy.filter(pl.col("stock_code") == sid)
     df_lazy = _format_match_time(df_lazy)
 
     if lazy:

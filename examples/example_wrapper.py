@@ -1,8 +1,10 @@
 import os
 import pandas as pd
+from pathlib import Path
 from data_sdk import (
     FinMindWrapper,
     ShioajiWrapper,
+    WarrantInfoWrapper,
     get_order_book_odd_lots,
     get_order_book_stocks,
     get_order_book_warrant,
@@ -34,13 +36,13 @@ def main():
     except Exception as e:
         print(f"Order book odd lots error: {e}")
 
-    print("\nFetching order book from parquet (warrant)...")
+    print("\nFetching order book from parquet (warrant, single sid)...")
     try:
-        df_warrant = get_order_book_warrant("2026-01-02", is_twse=True)
-        print(f"Order book warrant shape: {df_warrant.shape}")
-        print(df_warrant.head())
+        df_w_sid = get_order_book_warrant("2026-06-02", is_twse=True, sid="058998")
+        print(f"Order book warrant (sid) shape: {df_w_sid.shape}")
+        print(df_w_sid.head())
     except Exception as e:
-        print(f"Order book warrant error: {e}")
+        print(f"Order book warrant (sid) error: {e}")
 
     print("\nFetching Shioaji order book data...")
     try:
@@ -50,6 +52,17 @@ def main():
         print(df_shioaji.head())
     except Exception as e:
         print(f"Shioaji error: {e}")
+
+    print("\nFetching warrant info (summary + names + issuer map)...")
+    try:
+        warrant_info = WarrantInfoWrapper(cache_dir=Path("/tmp/warrant_cache"))
+        df_summary = warrant_info.get_warrant_summary()
+        print(f"Warrant summary shape: {df_summary.shape}")
+        print(df_summary.head())
+        issuer_map = warrant_info.build_issuer_map()
+        print(f"Issuer map sample: {str(issuer_map)[:50]}")
+    except Exception as e:
+        print(f"WarrantInfoWrapper error: {e}")
 
 if __name__ == "__main__":
     main()

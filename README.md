@@ -9,7 +9,8 @@ In your first block, you are required to install this repo via pip.
 
 Then, you may now import the classes and use the data.
 ```python
-from data_sdk import FinMindWrapper, ShioajiWrapper, get_order_book_stocks, get_order_book_odd_lots, get_order_book_warrant
+from data_sdk import FinMindWrapper, ShioajiWrapper, WarrantInfoWrapper, get_order_book_stocks, get_order_book_odd_lots, get_order_book_warrant
+from pathlib import Path
 
 shioaji_wrapper = ShioajiWrapper()
 finmind_wrapper = FinMindWrapper()
@@ -17,6 +18,7 @@ finmind_wrapper = FinMindWrapper()
 df_ob = get_order_book_stocks("2026-01-02", is_twse=True, sid="2330")
 df_odd = get_order_book_odd_lots("2026-01-02", is_twse=True, sid="2330")
 df_warrant = get_order_book_warrant("2026-01-02", is_twse=True)
+df_w_sid   = get_order_book_warrant("2026-01-02", is_twse=True, sid="700339")
 ```
 
 ## Installation
@@ -65,7 +67,8 @@ export SHIOAJI_SECRET_KEY=your_secret_key
 ### Wrappers
 
 ```python
-from data_sdk import FinMindWrapper, ShioajiWrapper, get_order_book_stocks, get_order_book_odd_lots, get_order_book_warrant
+from data_sdk import FinMindWrapper, ShioajiWrapper, WarrantInfoWrapper, get_order_book_stocks, get_order_book_odd_lots, get_order_book_warrant
+from pathlib import Path
 
 # Get FinMind broker data (downloads if missing)
 finmind = FinMindWrapper()
@@ -75,11 +78,18 @@ df = finmind.get_broker("2024-01-02", "2330")
 shioaji = ShioajiWrapper()
 df_ticks = shioaji.get_order_book("2024-01-02", "2330")
 
+# Fetch Taiwan warrant metadata (cached to disk, requires FINMIND_API_TOKEN)
+warrant_info = WarrantInfoWrapper(cache_dir=Path("/tmp/warrant_cache"))
+df_summary = warrant_info.get_warrant_summary()   # all warrants with strike/expiry
+df_names   = warrant_info.get_warrant_names()     # warrant code → stock_name
+issuer_map = warrant_info.build_issuer_map()      # {warrant_id: issuer_name}
+
 # Order book from parquet (requires DATA_SDK_ORDER_BOOK_PARQUET_PATH)
 df_ob = get_order_book_stocks("2026-01-02", is_twse=True, sid="2330")
 df_ob_day = get_order_book_stocks("2026-01-02", is_twse=True)  # entire day
 df_odd = get_order_book_odd_lots("2026-01-02", is_twse=True, sid="2330")
-df_warrant = get_order_book_warrant("2026-01-02", is_twse=True)  # warrant order book (entire day)
+df_warrant = get_order_book_warrant("2026-01-02", is_twse=True)           # all warrants
+df_w_sid   = get_order_book_warrant("2026-01-02", is_twse=True, sid="700339")  # single warrant
 ```
 
 ### Use LazyFrame for parquet reads (recommended)
