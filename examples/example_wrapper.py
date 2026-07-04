@@ -53,6 +53,23 @@ def main():
     except Exception as e:
         print(f"Shioaji error: {e}")
 
+    print("\nFetching Shioaji futures ticks (continuous near-month TXFR1)...")
+    try:
+        df_fut = shioaji.get_futures_ticks("2024-08-01", "TXFR1")
+        print(f"Shioaji futures ticks shape: {df_fut.shape}")
+        print(df_fut.head())
+    except Exception as e:
+        print(f"Shioaji futures ticks error: {e}")
+
+    print("\nFetching Shioaji futures contracts (currently listed)...")
+    try:
+        df_contracts = shioaji.get_futures_contracts()
+        print(f"Shioaji futures contracts shape: {df_contracts.shape}")
+        print(df_contracts.head())
+    except Exception as e:
+        print(f"Shioaji futures contracts error: {e}")
+
+
     print("\nFetching warrant info (summary + names + issuer map)...")
     try:
         warrant_info = WarrantInfoWrapper(cache_dir=Path("/tmp/warrant_cache"))

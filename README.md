@@ -50,6 +50,7 @@ If not set, they default to the current working directory.
 ```bash
 export DATA_SDK_FINMIND_BROKER_PATH="/mnt/nfs/backup/finmind_broker"
 export DATA_SDK_SHIOAJI_TICKS_PATH="/mnt/nfs/backup/shioaji_ticks"
+export DATA_SDK_SHIOAJI_FUTURES_TICKS_PATH="/mnt/nfs/backup/shioaji_futures_ticks"
 export DATA_SDK_ORDER_BOOK_PARQUET_PATH="/mnt/nfs/backup/parquets"
 ```
 
@@ -77,6 +78,19 @@ df = finmind.get_broker("2024-01-02", "2330")
 # Get Shioaji order book data (downloads if missing)
 shioaji = ShioajiWrapper()
 df_ticks = shioaji.get_order_book("2024-01-02", "2330")
+
+# Get Shioaji futures ticks (downloads if missing; code = product, continuous
+# near-month alias, or month symbol)
+df_fut = shioaji.get_futures_ticks("2024-08-01", "CDFR1")
+df_contracts = shioaji.get_futures_contracts()  # currently-listed contracts only
+
+# Fetch Taiwan warrant metadata (cached to disk, requires FINMIND_API_TOKEN)
+warrant_info = WarrantInfoWrapper(cache_dir=Path("/tmp/warrant_cache"))
+df_summary = warrant_info.get_warrant_summary()   # all warrants with strike/expiry
+df_names   = warrant_info.get_warrant_names()     # warrant code → stock_name
+issuer_map = warrant_info.build_issuer_map()      # {warrant_id: issuer_name}
+
+# Order book from parquet (requires DATA_SDK_ORDER_BOOK_PARQUET_PATH)
 
 # Fetch Taiwan warrant metadata (cached to disk, requires FINMIND_API_TOKEN)
 warrant_info = WarrantInfoWrapper(cache_dir=Path("/tmp/warrant_cache"))
