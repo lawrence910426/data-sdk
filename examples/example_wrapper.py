@@ -4,6 +4,7 @@ from pathlib import Path
 from data_sdk import (
     FinMindWrapper,
     ShioajiWrapper,
+    TEJWrapper,
     WarrantInfoWrapper,
     get_order_book_odd_lots,
     get_order_book_stocks,
@@ -69,6 +70,14 @@ def main():
     except Exception as e:
         print(f"Shioaji futures contracts error: {e}")
 
+    print("\nFetching TEJ monthly revenue announcements (TWN/EWSALE)...")
+    try:
+        tej = TEJWrapper()
+        df_rev = tej.get_ewsale()
+        print(f"TEJ revenue shape: {df_rev.shape}")
+        print(df_rev.head())
+    except Exception as e:
+        print(f"TEJ revenue error: {e}")
 
     print("\nFetching warrant info (summary + names + issuer map)...")
     try:

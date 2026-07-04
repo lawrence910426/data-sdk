@@ -3,3 +3,4 @@ polars
 FinMind
 shioaji
 requests
+tejapi
