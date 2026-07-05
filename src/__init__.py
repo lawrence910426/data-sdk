@@ -4,6 +4,8 @@ from .wrappers import (
     get_order_book_stocks,
     get_order_book_odd_lots,
     get_order_book_warrant,
+    get_fop_parquet,
+    get_fop_order_book,
     WarrantInfoWrapper,
     TEJWrapper,
 )
@@ -14,6 +16,8 @@ __all__ = [
     "get_order_book_stocks",
     "get_order_book_odd_lots",
     "get_order_book_warrant",
+    "get_fop_parquet",
+    "get_fop_order_book",
     "WarrantInfoWrapper",
     "TEJWrapper",
 ]

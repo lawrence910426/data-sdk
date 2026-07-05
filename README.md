@@ -14,6 +14,8 @@ from data_sdk import (
     ShioajiWrapper,
     TEJWrapper,
     WarrantInfoWrapper,
+    get_fop_order_book,
+    get_fop_parquet,
     get_order_book_odd_lots,
     get_order_book_stocks,
     get_order_book_warrant,
@@ -62,6 +64,7 @@ export DATA_SDK_SHIOAJI_TICKS_PATH="/mnt/nfs/backup/shioaji_ticks"
 export DATA_SDK_SHIOAJI_FUTURES_TICKS_PATH="/mnt/nfs/backup/shioaji_futures_ticks"
 export DATA_SDK_ORDER_BOOK_PARQUET_PATH="/mnt/nfs/backup/parquets"
 export DATA_SDK_TEJ_CACHE_PATH="/mnt/nfs/backup/tej_cache"
+export DATA_SDK_FOP_PARQUET_PATH="/mnt/nfs/backup/fop_parquets"  # defaults to this path if unset
 ```
 
 ### API Keys
@@ -84,6 +87,8 @@ from data_sdk import (
     ShioajiWrapper,
     TEJWrapper,
     WarrantInfoWrapper,
+    get_fop_order_book,
+    get_fop_parquet,
     get_order_book_odd_lots,
     get_order_book_stocks,
     get_order_book_warrant,
@@ -124,6 +129,68 @@ df_odd = get_order_book_odd_lots("2026-01-02", is_twse=True, sid="2330")
 df_warrant = get_order_book_warrant("2026-01-02", is_twse=True)           # all warrants
 df_w_sid   = get_order_book_warrant("2026-01-02", is_twse=True, sid="700339")  # single warrant
 ```
+
+### TAIFEX futures/options (FOP) parquet
+
+Raw TAIFEX market-data parquets (requires `DATA_SDK_FOP_PARQUET_PATH`, defaults to `/mnt/nfs/backup/fop_parquets`).
+Formats: `i024` deals, `i081` order-book deltas, `i083` session-open order-book snapshots,
+`i084` snapshot-channel refresh cycles (only captured for recent dates, ~2026-06-26 onward).
+
+```python
+from data_sdk import get_fop_parquet
+
+# Deals for one instrument (day session)
+df_deals = get_fop_parquet("2026-07-03", "futures", "i024", instrument="TXFG6")
+
+# Night session options deltas as a LazyFrame (recommended for i081/i084 — files are 750MB+)
+lf = get_fop_parquet("2026-07-03", "options", "i081", session="night", lazy=True)
+
+# Snapshot channel (recent dates only)
+df_snap = get_fop_parquet("2026-07-03", "futures", "i084", instrument="TXFG6")
+```
+
+Caveats:
+- Use `info_time` / `match_time` for event time; the `timestamp` column is the producer's replay wall clock and is unreliable.
+- Prices: `price_raw` is a raw integer, signed by `price_sign` (`'-'` means negative); there is no decimal scaling. The true decimal locator is per product (TAIFEX I010; e.g. TXF=2, GDF=3) and is not captured here, so rescale `price_raw / 10**locator` yourself when you need the product's natural units.
+
+### TAIFEX reconstructed order book
+
+`get_fop_order_book` replays i083/i084 snapshots + i081 deltas (+ i024 deals) into a
+TWSE-like 5-level book time series for one product: one row per event with
+`bid_price_1..5`/`bid_volume_1..5`/`ask_price_1..5`/`ask_volume_1..5`, best implied
+levels (`impl_bid_*`/`impl_ask_*`), deal columns (`deal_price`/`deal_volume`/
+`cumulative_volume`) on `source == "i024"` rows, plus `is_trial` and `is_stale` flags.
+Snapshots re-base the book and clear `is_stale`; deltas apply best-effort and set
+`is_stale` when they cannot apply cleanly or leave the top of book crossed.
+
+```python
+from data_sdk import get_fop_order_book
+
+# TXF front month, day session (~1 s warm; ~90 s on the first read of a day,
+# which is dominated by the NFS parquet scan). The replay loop is numba-JIT'd.
+# All price columns are the raw integer price_raw (divide by 10**locator, e.g.
+# 10**2 for TXF/MXF, for index points).
+df_book = get_fop_order_book("2026-07-03", "futures", "TXFG6")
+
+# Night session / options / polars-output variants
+df_night = get_fop_order_book("2026-07-03", "futures", "TXFG6", session="night")
+pl_book  = get_fop_order_book("2026-07-03", "options", "TXO20000G6", to_pandas=False)
+```
+
+Caveats:
+- Returns a pandas `DataFrame` by default; pass `to_pandas=False` for an eager
+  **polars** `DataFrame`. Price and volume columns are nullable `Int64` in polars
+  and float64-with-NaN in pandas (so the pandas dtypes stay stable across days).
+- All price columns (`*_price*`, `deal_price`) are the raw integer `price_raw`
+  with no decimal scaling; divide by `10**locator` (e.g. 2 for TXF) yourself for
+  the product's natural units — the caveat above applies.
+- Pre-open trial snapshots are adopted as the book base and flagged `is_trial=True`.
+- `is_stale=False` is best-effort, not a guarantee: a silently lost delta that still
+  applies cleanly is undetectable; the i084 carousel re-bases every ~5 s and bounds
+  the error. Before ~2026-06-26 there is no i084, so a stale flag raised after the
+  open never clears.
+- Rows are in replay (`prod_msg_seq`) order; i084-sourced rows carry a disclosure
+  `info_time` up to a few seconds behind the neighbouring delta rows.
 
 ### Use LazyFrame for parquet reads (recommended)
 

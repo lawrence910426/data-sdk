@@ -6,6 +6,8 @@ from data_sdk import (
     ShioajiWrapper,
     TEJWrapper,
     WarrantInfoWrapper,
+    get_fop_order_book,
+    get_fop_parquet,
     get_order_book_odd_lots,
     get_order_book_stocks,
     get_order_book_warrant,
@@ -44,6 +46,22 @@ def main():
         print(df_w_sid.head())
     except Exception as e:
         print(f"Order book warrant (sid) error: {e}")
+
+    print("\nFetching FOP parquet (TAIFEX futures deals, single instrument)...")
+    try:
+        df_fop = get_fop_parquet("2026-07-03", "futures", "i024", instrument="TXFG6")
+        print(f"FOP i024 shape: {df_fop.shape}")
+        print(df_fop.head())
+    except Exception as e:
+        print(f"FOP parquet error: {e}")
+
+    print("\nReconstructing FOP order book (TAIFEX futures, single instrument)...")
+    try:
+        df_book = get_fop_order_book("2026-07-03", "futures", "TXFG6")
+        print(f"FOP order book shape: {df_book.shape}")
+        print(df_book.head())
+    except Exception as e:
+        print(f"FOP order book error: {e}")
 
     print("\nFetching Shioaji order book data...")
     try:

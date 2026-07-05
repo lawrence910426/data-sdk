@@ -2,10 +2,12 @@ from setuptools import setup, find_packages
 
 setup(
     name="data-sdk",
-    version="0.4.1",
+    version="0.5.0",
     packages=["data_sdk", "data_sdk.crawlers", "data_sdk.wrappers"],
     package_dir={"data_sdk": "src"},
     install_requires=[
+        "numba",
+        "numpy",
         "pandas",
         "polars",
         "FinMind",
