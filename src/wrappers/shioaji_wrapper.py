@@ -1,4 +1,5 @@
 import os
+import time
 import pandas as pd
 import shioaji as sj
 from pathlib import Path
@@ -7,13 +8,16 @@ import sys
 class ShioajiWrapper:
     _api = None
     _ref_count = 0
+    # Max wait for Shioaji's contract-file download, in seconds.
+    _CONTRACTS_FETCH_TIMEOUT_S = 60
 
     def __init__(self):
         if ShioajiWrapper._api is None:
             ShioajiWrapper._api = sj.Shioaji(simulation=False)
             ShioajiWrapper._api.login(
                 api_key=os.environ.get("SHIOAJI_API_KEY"),
-                secret_key=os.environ.get("SHIOAJI_SECRET_KEY")
+                secret_key=os.environ.get("SHIOAJI_SECRET_KEY"),
+                contracts_timeout=ShioajiWrapper._CONTRACTS_FETCH_TIMEOUT_S * 1000,
             )
         ShioajiWrapper._ref_count += 1
 
@@ -27,9 +31,28 @@ class ShioajiWrapper:
                 pass
             ShioajiWrapper._api = None
 
-    def _download_ticks_to_parquet(self, day, sid, dest_path: Path, data_dir: Path) -> pd.DataFrame:
+    def _ensure_contracts_fetched(self):
+        """Block until Shioaji's contract file is downloaded.
+
+        login() waits up to contracts_timeout for the download but may return
+        with it still incomplete (it does not raise on timeout), and iterating
+        or indexing Contracts before then sees a partial/empty set. Poll
+        Contracts.status until Fetched; raise if it never completes.
+        """
         if ShioajiWrapper._api is None:
             raise RuntimeError("Shioaji API is not initialized.")
+        deadline = time.monotonic() + ShioajiWrapper._CONTRACTS_FETCH_TIMEOUT_S
+        while ShioajiWrapper._api.Contracts.status != sj.FetchStatus.Fetched:
+            if time.monotonic() >= deadline:
+                raise RuntimeError(
+                    "Shioaji contract download did not complete within "
+                    f"{ShioajiWrapper._CONTRACTS_FETCH_TIMEOUT_S}s "
+                    f"(Contracts.status={ShioajiWrapper._api.Contracts.status})."
+                )
+            time.sleep(0.1)
+
+    def _download_ticks_to_parquet(self, day, sid, dest_path: Path, data_dir: Path) -> pd.DataFrame:
+        self._ensure_contracts_fetched()
 
         ticks = ShioajiWrapper._api.ticks(
             contract=ShioajiWrapper._api.Contracts.Stocks[sid],
@@ -62,8 +85,7 @@ class ShioajiWrapper:
         return self._download_ticks_to_parquet(day, sid, dest_path, data_dir)
 
     def _download_futures_ticks_to_parquet(self, day, code, dest_path: Path, data_dir: Path) -> pd.DataFrame:
-        if ShioajiWrapper._api is None:
-            raise RuntimeError("Shioaji API is not initialized.")
+        self._ensure_contracts_fetched()
 
         contract = ShioajiWrapper._api.Contracts.Futures[code]
         if contract is None:
@@ -115,13 +137,7 @@ class ShioajiWrapper:
         currently-listed contracts only; expired or delisted contracts are
         absent.
         """
-        if ShioajiWrapper._api is None:
-            raise RuntimeError("Shioaji API is not initialized.")
-
-        # The contract file downloads asynchronously after login; __getitem__
-        # blocks until it is complete, plain iteration does not. Index once so
-        # the loop below sees the full contract set.
-        ShioajiWrapper._api.Contracts.Futures["TXF"]
+        self._ensure_contracts_fetched()
 
         fields = ["code", "symbol", "name", "category", "delivery_month",
                   "delivery_date", "underlying_kind", "underlying_code", "unit"]
