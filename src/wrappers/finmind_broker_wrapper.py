@@ -121,14 +121,22 @@ class FinMindWrapper:
         calendar = pd.read_parquet(path)
         return sorted(calendar["date"].tolist())
 
-    def get_dataset_by_range(self, dataset: str, start_date: str, end_date: str) -> pd.DataFrame:
+    def get_dataset_by_range(self, dataset: str, start_date: str, end_date: str,
+                             use_trading_calendar: bool = True) -> pd.DataFrame:
         """Range accessor: whole-market data over [start_date, end_date].
 
-        Iterates the trading calendar and concatenates the per-day snapshots,
-        so every day is downloaded at most once ever.
+        Iterates day by day and concatenates the per-day snapshots, so every day
+        is downloaded at most once ever. use_trading_calendar=False iterates
+        every calendar day instead — needed for datasets keyed to announcement
+        dates that can fall on market holidays (e.g. a 暫停融券 window starting
+        on a typhoon closure day).
         """
-        frames = [self.get_dataset_by_date(dataset, date)
-                  for date in self.get_trading_dates(start_date, end_date)]
+        if use_trading_calendar:
+            dates = self.get_trading_dates(start_date, end_date)
+        else:
+            dates = [stamp.strftime("%Y-%m-%d")
+                     for stamp in pd.date_range(start_date, end_date, freq="D")]
+        frames = [self.get_dataset_by_date(dataset, date) for date in dates]
         frames = [frame for frame in frames if not frame.empty]
         return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
 
@@ -152,6 +160,9 @@ class FinMindWrapper:
         (stock_id, date, end_date, reason); expand [date, end_date] yourself to
         test whether a given day is inside a window. Windows starting before
         start_date are not included — fetch with a buffer if you need them.
+        Iterates calendar days (not trading days): windows can start on a
+        market holiday (e.g. typhoon closure).
         """
         return self.get_dataset_by_range("TaiwanStockMarginShortSaleSuspension",
-                                         start_date, end_date or start_date)
+                                         start_date, end_date or start_date,
+                                         use_trading_calendar=False)
