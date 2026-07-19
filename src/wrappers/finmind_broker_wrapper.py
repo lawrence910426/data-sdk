@@ -16,7 +16,7 @@ class FinMindWrapper:
             token = os.environ.get("FINMIND_API_TOKEN")
             if not token:
                 print("Warning: FINMIND_API_TOKEN not set. Download may fail.", file=sys.stderr)
-            
+
             FinMindWrapper._api = DataLoader()
             if token:
                 FinMindWrapper._api.login_by_token(api_token=token)
@@ -34,7 +34,7 @@ class FinMindWrapper:
             df = FinMindWrapper._api.taiwan_stock_trading_daily_report(date=day, use_async=True)
             if df is None or (hasattr(df, "empty") and df.empty):
                  raise ValueError(f"Empty result for {day}")
-            
+
             os.makedirs(output_dir, exist_ok=True)
             path = os.path.join(output_dir, f"{day}.parquet")
             df.to_parquet(path, index=False)
@@ -57,79 +57,101 @@ class FinMindWrapper:
                 raise FileNotFoundError(
                     f"FinMind broker file not found: {path} and download failed: {e}"
                 )
-                
+
         sid_str = str(sid)
         out = pd.read_parquet(path, filters=[("stock_id", "==", sid_str)])
         return out.reset_index(drop=True)
 
     # ------------------------------------------------------------------
-    # Generic FinMind dataset access (same cache-then-read idea as get_broker).
-    # Downloads a dataset over [start_date, end_date] (whole market unless
-    # data_id is given), caches to parquet, returns a DataFrame.
+    # Generic whole-market FinMind access.
+    #
+    # Design: every dataset has ONE base accessor that downloads a single
+    # day's whole-market snapshot (cached as
+    # {DATA_SDK_FINMIND_CACHE_PATH}/{dataset}/{date}.parquet), and ONE range
+    # accessor that assembles [start_date, end_date] by iterating the trading
+    # calendar over the per-day cache. Dataset-specific helpers
+    # (get_price / get_margin_short / get_short_suspension) simply call the
+    # range accessor. The per-day cache is therefore whole-market and
+    # reusable across studies and stocks.
     # ------------------------------------------------------------------
-    def cache_dir(self):
-        d = os.environ.get("DATA_SDK_FINMIND_CACHE_PATH")
-        if not d:
+    def cache_directory(self) -> str:
+        directory = os.environ.get("DATA_SDK_FINMIND_CACHE_PATH")
+        if not directory:
             print("Warning: DATA_SDK_FINMIND_CACHE_PATH not set. Using current directory.", file=sys.stderr)
-            d = "."
-        return d
+            directory = "."
+        return directory
 
-    def download_dataset(self, dataset, start_date, end_date, data_id):
+    def request_finmind(self, params: dict) -> pd.DataFrame:
+        """One FinMind v4 REST call with retry on rate limiting (status 402)."""
         token = os.environ.get("FINMIND_API_TOKEN", "")
-        params = {"dataset": dataset, "start_date": start_date,
-                  "end_date": end_date, "token": token}
-        if data_id:
-            params["data_id"] = data_id
         for attempt in range(6):
-            r = requests.get(FINMIND_API_URL, params=params, timeout=60)
-            if r.status_code == 402 or (r.ok and r.json().get("status") == 402):
-                # rate limited: FinMind resets the hourly quota; back off and retry
-                print(f"[{dataset} {start_date}] rate limited, sleeping 60s...", file=sys.stderr)
+            response = requests.get(FINMIND_API_URL, params={**params, "token": token}, timeout=60)
+            if response.status_code == 402 or (response.ok and response.json().get("status") == 402):
+                print(f"[FinMind {params.get('dataset')}] rate limited, sleeping 60s...", file=sys.stderr)
                 time.sleep(60)
                 continue
-            r.raise_for_status()
-            body = r.json()
+            response.raise_for_status()
+            body = response.json()
             if body.get("status") != 200:
                 raise RuntimeError(f"FinMind error {body.get('status')}: {body.get('msg')}")
             return pd.DataFrame(body.get("data", []))
-        raise RuntimeError(f"FinMind still rate limited after retries: {dataset} {start_date}")
+        raise RuntimeError(f"FinMind still rate limited after retries: {params.get('dataset')}")
 
-    def get_dataset(self, dataset, start_date, end_date=None, data_id=None):
-        """Download any FinMind dataset for [start_date, end_date], cache, return DataFrame.
+    def get_dataset_by_date(self, dataset: str, date: str) -> pd.DataFrame:
+        """Base accessor: one day's whole-market data for any dataset, cached per day.
 
-        Whole-market when data_id is None. Cached under
-        {DATA_SDK_FINMIND_CACHE_PATH}/{dataset}/{start}_{end}[_{data_id}].parquet
-        so a backtest loop pays each (dataset, range) download only once.
+        An empty day is cached as an empty parquet so it is not re-downloaded.
         """
-        end_date = end_date or start_date
-        cache_dir = os.path.join(self.cache_dir(), dataset)
-        key = f"{start_date}_{end_date}" + (f"_{data_id}" if data_id else "")
-        path = os.path.join(cache_dir, f"{key}.parquet")
+        path = os.path.join(self.cache_directory(), dataset, f"{date}.parquet")
         if not os.path.isfile(path):
-            df = self.download_dataset(dataset, start_date, end_date, data_id)
-            os.makedirs(cache_dir, exist_ok=True)
-            df.to_parquet(path, index=False)
+            frame = self.request_finmind({"dataset": dataset, "start_date": date, "end_date": date})
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            frame.to_parquet(path, index=False)
         return pd.read_parquet(path)
 
-    def get_price(self, day, sid=None):
-        """Whole-market daily OHLCV for one day (TaiwanStockPrice), cached per day."""
-        df = self.get_dataset("TaiwanStockPrice", day)
-        return df if sid is None else df[df["stock_id"] == str(sid)].reset_index(drop=True)
+    def get_trading_dates(self, start_date: str, end_date: str) -> list:
+        """Trading calendar in [start_date, end_date] (TaiwanStockTradingDate), cached per range."""
+        path = os.path.join(self.cache_directory(), "TaiwanStockTradingDate",
+                            f"{start_date}_{end_date}.parquet")
+        if not os.path.isfile(path):
+            frame = self.request_finmind({"dataset": "TaiwanStockTradingDate",
+                                          "start_date": start_date, "end_date": end_date})
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            frame.to_parquet(path, index=False)
+        calendar = pd.read_parquet(path)
+        return sorted(calendar["date"].tolist())
 
-    def get_margin_short(self, day, sid=None):
-        """信用額度總量管制餘額表 (TaiwanStockMarginPurchaseShortSale) for one day.
+    def get_dataset_by_range(self, dataset: str, start_date: str, end_date: str) -> pd.DataFrame:
+        """Range accessor: whole-market data over [start_date, end_date].
 
-        A stock appearing here on `day` is credit-eligible (融資融券) that day;
+        Iterates the trading calendar and concatenates the per-day snapshots,
+        so every day is downloaded at most once ever.
+        """
+        frames = [self.get_dataset_by_date(dataset, date)
+                  for date in self.get_trading_dates(start_date, end_date)]
+        frames = [frame for frame in frames if not frame.empty]
+        return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+
+    def get_price(self, start_date: str, end_date: str = None) -> pd.DataFrame:
+        """Whole-market daily OHLCV (TaiwanStockPrice) over a date range."""
+        return self.get_dataset_by_range("TaiwanStockPrice", start_date, end_date or start_date)
+
+    def get_margin_short(self, start_date: str, end_date: str = None) -> pd.DataFrame:
+        """信用額度總量管制餘額表 (TaiwanStockMarginPurchaseShortSale) over a date range.
+
+        A stock present on a date is credit-eligible (融資融券) that day;
         ShortSaleLimit > 0 means short selling is permitted.
         """
-        df = self.get_dataset("TaiwanStockMarginPurchaseShortSale", day)
-        return df if sid is None else df[df["stock_id"] == str(sid)].reset_index(drop=True)
+        return self.get_dataset_by_range("TaiwanStockMarginPurchaseShortSale",
+                                         start_date, end_date or start_date)
 
-    def get_short_suspension(self, start_date, end_date=None, sid=None):
-        """暫停融券賣出表(融券回補日) (TaiwanStockMarginShortSaleSuspension).
+    def get_short_suspension(self, start_date: str, end_date: str = None) -> pd.DataFrame:
+        """暫停融券賣出表(融券回補日) (TaiwanStockMarginShortSaleSuspension) over a date range.
 
-        Rows have (stock_id, date, end_date, reason): short selling is suspended
-        for that stock over [date, end_date]. Fetched over a range in one call.
+        Each per-day snapshot holds the suspension windows STARTING that day
+        (stock_id, date, end_date, reason); expand [date, end_date] yourself to
+        test whether a given day is inside a window. Windows starting before
+        start_date are not included — fetch with a buffer if you need them.
         """
-        df = self.get_dataset("TaiwanStockMarginShortSaleSuspension", start_date, end_date)
-        return df if sid is None else df[df["stock_id"] == str(sid)].reset_index(drop=True)
+        return self.get_dataset_by_range("TaiwanStockMarginShortSaleSuspension",
+                                         start_date, end_date or start_date)
