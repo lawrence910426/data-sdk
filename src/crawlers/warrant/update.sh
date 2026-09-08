@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# Refresh the warrant database end to end.
+#
+#   bash update.sh [cache-dir]
+#
+# Crawl is incremental (dlt cursors under <cache-dir>/mops_pipeline_state);
+# the two curated tables are pure functions of the raw layer and are rebuilt
+# whole every run, so there is no build state to keep in sync.
+#
+# Do NOT delete <cache-dir>/mops_raw/warrant_strike_ratio_* to "start clean":
+# MOPS serves only a rolling ~18 months of those reports, so the accumulated
+# append-only copy is the only record of anything older.
+set -euo pipefail
+
+CACHE_DIR="${1:-cache}"
+PYTHON="${PYTHON:-python}"
+
+echo "=== crawl (incremental) ==="
+"$PYTHON" -m data_sdk.crawlers.warrant --cache-dir "$CACHE_DIR"
+
+echo "=== build dimension table ==="
+"$PYTHON" -m data_sdk.crawlers.warrant.build_basic_info --cache-dir "$CACHE_DIR"
+
+echo "=== build term history (SCD2) ==="
+"$PYTHON" -m data_sdk.crawlers.warrant.build_history --cache-dir "$CACHE_DIR"
+
+echo "=== validate (offline, internal consistency) ==="
+"$PYTHON" -m data_sdk.crawlers.warrant.validate --cache-dir "$CACHE_DIR"
+
+echo "=== verify (online, against TWSE/TPEx OpenAPI) ==="
+"$PYTHON" -m data_sdk.crawlers.warrant.verify_openapi --cache-dir "$CACHE_DIR"
