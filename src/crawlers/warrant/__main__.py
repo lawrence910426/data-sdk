@@ -13,6 +13,7 @@ from pathlib import Path
 
 import dlt
 
+from . import DEFAULT_CACHE_PATH, cache_directory as cache_dir
 from .warrant_reports import HISTORY_START_YEAR, warrant_reports_source
 
 RESOURCE_NAMES = [
@@ -26,12 +27,14 @@ RESOURCE_NAMES = [
 
 def main() -> None:
     parser = argparse.ArgumentParser(description='Crawl TWSE MOPS warrant reports into raw parquet tables.')
-    parser.add_argument('--cache-dir', required=True, help='directory to write mops_raw/ and mops_pipeline_state/ under')
+    parser.add_argument('--cache-dir', default=None,
+                        help=f'writes mops_raw/ and mops_pipeline_state/ under this'
+                             f' (default: $DATA_SDK_WARRANT_CACHE_PATH or {DEFAULT_CACHE_PATH})')
     parser.add_argument('--history-start-year', type=int, default=HISTORY_START_YEAR, help='earliest year to sweep for delisted warrants')
     parser.add_argument('--resources', nargs='+', choices=RESOURCE_NAMES, default=None, help='restrict the run to these resources (default: all three)')
     arguments = parser.parse_args()
 
-    cache_directory = Path(arguments.cache_dir)
+    cache_directory = cache_dir(arguments.cache_dir)
     pipeline = dlt.pipeline(
         pipeline_name='mops_warrant_reports',
         destination=dlt.destinations.filesystem(

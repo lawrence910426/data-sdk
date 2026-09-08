@@ -2,7 +2,7 @@
 
 One row per warrant, holding the attributes that do not change over its life
 plus its *current* terms. Point-in-time strike/ratio/expiry live in
-``warrant_term_history.parquet`` instead (see :mod:`build_history`).
+``warrant_history.parquet`` instead (see :mod:`build_history`).
 
 Three sources, in precedence order per field:
 
@@ -14,7 +14,7 @@ Three sources, in precedence order per field:
    cursor is never re-read and its mutable fields freeze at first-crawl values;
    an early termination or extension silently rots them. The snapshot has no
    cursor and is replaced whole every run, so it always reflects MOPS today.
-3. ``tej_seed/basic_info.parquet`` -- repairs ``list_date`` /
+3. the TEJ Pro export (``$DATA_SDK_TEJ_WARRANTS_PATH``) -- repairs ``list_date`` /
    ``exercise_start_date``, which MOPS itself serves corrupted (~19,889 rows all
    set to the literal 2023-12-26; confirmed by live-replaying the MOPS query).
 
@@ -33,6 +33,13 @@ import glob
 from pathlib import Path
 
 import pandas as pd
+
+from . import (
+    DEFAULT_CACHE_PATH,
+    TEJ_BASIC_INFO_GLOB,
+    cache_directory as cache_dir,
+    find_tej_seed,
+)
 
 #: Primary key. ``warrant_id`` is the 6-character listing code with any
 #: recycling suffix stripped; it is NOT unique on its own (MOPS reuses a code
@@ -178,11 +185,12 @@ def build_dim_warrant(cache_directory: Path) -> pd.DataFrame:
         basic = union_new_listings(basic, snapshot)
         basic = overlay_snapshot(basic, snapshot)
 
-    tej_basic_path = cache_directory / 'tej_seed' / 'basic_info.parquet'
-    if tej_basic_path.exists():
+    tej_basic_path = find_tej_seed(TEJ_BASIC_INFO_GLOB)
+    if tej_basic_path is not None:
+        print(f'TEJ seed: {tej_basic_path}')
         basic = impute_dates_from_tej(basic, pd.read_parquet(tej_basic_path))
     else:
-        print(f'WARNING: {tej_basic_path} missing -- skipping list_date repair')
+        print(f'WARNING: no {TEJ_BASIC_INFO_GLOB} in the TEJ seed dir -- skipping list_date repair')
         basic['list_date_source'] = 'mops'
         basic['exercise_start_date_source'] = 'mops'
 
@@ -194,11 +202,12 @@ def build_dim_warrant(cache_directory: Path) -> pd.DataFrame:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description='Build the warrant dimension table.')
-    parser.add_argument('--cache-dir', default='cache')
+    parser.add_argument('--cache-dir', default=None,
+                        help=f'default: $DATA_SDK_WARRANT_CACHE_PATH or {DEFAULT_CACHE_PATH}')
     parser.add_argument('--out', default=None)
     arguments = parser.parse_args()
 
-    cache_directory = Path(arguments.cache_dir)
+    cache_directory = cache_dir(arguments.cache_dir)
     out_path = (
         Path(arguments.out) if arguments.out else cache_directory / 'warrant_basic_info.parquet'
     )

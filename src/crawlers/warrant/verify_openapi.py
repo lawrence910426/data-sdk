@@ -21,6 +21,8 @@ import sys
 from pathlib import Path
 
 import pandas as pd
+
+from . import DEFAULT_CACHE_PATH, cache_directory as cache_dir
 import requests
 
 OPENAPI_ENDPOINTS = (
@@ -80,7 +82,7 @@ def report(label: str, match_rate: float, matched: int, total: int) -> bool:
 
 
 def verify(cache_directory: Path) -> bool:
-    history = pd.read_parquet(cache_directory / 'warrant_term_history.parquet')
+    history = pd.read_parquet(cache_directory / 'warrant_history.parquet')
     current = history[history['is_current']]
 
     print('fetching exchange OpenAPI...')
@@ -122,10 +124,11 @@ def verify(cache_directory: Path) -> bool:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description='Verify built terms against the exchange OpenAPI.')
-    parser.add_argument('--cache-dir', default='cache')
+    parser.add_argument('--cache-dir', default=None,
+                        help=f'default: $DATA_SDK_WARRANT_CACHE_PATH or {DEFAULT_CACHE_PATH}')
     arguments = parser.parse_args()
 
-    if not verify(Path(arguments.cache_dir)):
+    if not verify(cache_dir(arguments.cache_dir)):
         sys.exit(1)
 
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Refresh the warrant database end to end.
 #
-#   bash update.sh [cache-dir]
+#   bash update.sh [cache-dir]      # default: $DATA_SDK_WARRANT_CACHE_PATH
 #
 # Crawl is incremental (dlt cursors under <cache-dir>/mops_pipeline_state);
 # the two curated tables are pure functions of the raw layer and are rebuilt
@@ -12,7 +12,7 @@
 # append-only copy is the only record of anything older.
 set -euo pipefail
 
-CACHE_DIR="${1:-cache}"
+CACHE_DIR="${1:-${DATA_SDK_WARRANT_CACHE_PATH:-/mnt/nfs/backup/warrant_terms}}"
 PYTHON="${PYTHON:-python}"
 
 echo "=== crawl (incremental) ==="

@@ -18,17 +18,24 @@ history rows.
     warrant_strike_ratio_reset/        t95sb03, incremental
     warrant_announcement/         t95sb01 + o_t95sb01, incremental
   mops_pipeline_state/          dlt cursors
-  tej_seed/                     layer 0b — frozen one-time TEJ Pro exports
-    basic_info.parquet
-    adjustment.parquet
   warrant_basic_info.parquet    layer 1 — one row per warrant, current terms
-  warrant_term_history.parquet  layer 2 — one row per state change  ← the product
+  warrant_history.parquet       layer 2 — one row per state change  ← the product
+
+$DATA_SDK_TEJ_WARRANTS_PATH/     layer 0b — frozen TEJ Pro exports, read-only
+  tej_warrant_raw_*.parquet          (default /mnt/nfs/backup/tej_warrants)
+  tej_warrant_adjustment_*.parquet
 ```
+
+Paths follow the data_sdk convention: `$DATA_SDK_WARRANT_CACHE_PATH`
+(default `/mnt/nfs/backup/warrant_history`) and `$DATA_SDK_TEJ_WARRANTS_PATH`
+(default `/mnt/nfs/backup/tej_warrants`). Every CLI takes `--cache-dir` to
+override. The newest export matching each glob is used, so dropping a fresher
+TEJ file is all it takes to extend the seed.
 
 ## Using it
 
 ```python
-history = pl.read_parquet('cache/warrant_term_history.parquet').sort('effective_date')
+history = pl.read_parquet('cache/warrant_history.parquet').sort('effective_date')
 
 terms = (
     quotes.sort('date')
@@ -53,7 +60,7 @@ There is no `valid_to` — "the latest row at or before this date" already defin
 the interval. Current terms are `history.filter(pl.col('is_current'))`, which is
 what `warrant_basic_info.parquet` holds.
 
-## `warrant_term_history.parquet` schema
+## `warrant_history.parquet` schema
 
 One row per warrant per state change. Primary key `(warrant_id, warrant_name,
 effective_date, sequence)`.
@@ -114,10 +121,10 @@ record of anything older.
 
 | Source | Supplies | Without it |
 |---|---|---|
-| `tej_seed/adjustment` | strike/ratio history, 2020-01-02 to the export date | MOPS's own t95sb02 covers 5% of warrants — 229k warrants would show a flat strike that demonstrably moved |
+| TEJ adjustment export | strike/ratio history, 2020-01-02 to the export date | MOPS's own t95sb02 covers 5% of warrants — 229k warrants would show a flat strike that demonstrably moved |
 | `warrant_announcement` | expiry changes, dated by *announcement* | An early-terminated warrant would look alive until its original maturity, mispricing every day after the announcement |
 | `warrant_active_snapshot` | current expiry / last trade date / latest terms | `warrant_basic_info` is incremental on `list_date`, so an already-listed warrant is never re-read and its mutable fields freeze at first-crawl values |
-| `tej_seed/basic_info` | repairs `list_date`, `exercise_start_date` | MOPS itself serves ~19,889 rows with both set to the literal 2023-12-26 |
+| TEJ basic-info export | repairs `list_date`, `exercise_start_date` | MOPS itself serves ~19,889 rows with both set to the literal 2023-12-26 |
 | `warrant_strike_ratio_adjustment/_reset` | strike history after the frozen seed | History would stop at the seed date |
 
 The key is `(warrant_id, warrant_name)`, where `warrant_id` is the listing code

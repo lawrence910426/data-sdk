@@ -1,4 +1,4 @@
-"""Build ``<cache-dir>/warrant_term_history.parquet`` -- point-in-time warrant terms.
+"""Build ``<cache-dir>/warrant_history.parquet`` -- point-in-time warrant terms.
 
 One row per warrant per *state change*. Each row is a full snapshot of the
 warrant's terms as known on ``effective_date``, so a lookup is one as-of join:
@@ -21,7 +21,7 @@ Sources, in precedence order on a ``(warrant_id, warrant_name, effective_date)``
 
 | rank | source | covers | why |
 |---|---|---|---|
-| 1 | ``tej_seed/adjustment.parquet`` | 2020-01-02 .. seed end | The backbone. MOPS's own t95sb02 keeps only a rolling ~18 months, so 95% of historical strike changes exist nowhere else. |
+| 1 | the TEJ Pro adjustment export | 2020-01-02 .. seed end | The backbone. MOPS's own t95sb02 keeps only a rolling ~18 months, so 95% of historical strike changes exist nowhere else. |
 | 2 | ``mops_raw/warrant_announcement`` | ~2026-01 onward | Expiry changes with their *announcement* date -- the only point-in-time expiry source. |
 | 3 | ``mops_raw/warrant_strike_ratio_adjustment`` / ``_reset`` | after seed end | Keeps strike history running once the frozen TEJ seed stops. |
 | 4 | synthesised issuance from the dimension table | warrants absent from TEJ | New listings, and the 2019 cohort predating the TEJ window. |
@@ -43,6 +43,13 @@ from pathlib import Path
 
 import pandas as pd
 
+from . import (
+    DEFAULT_CACHE_PATH,
+    TEJ_ADJUSTMENT_GLOB,
+    TEJ_BASIC_INFO_GLOB,
+    cache_directory as cache_dir,
+    find_tej_seed,
+)
 from .build_basic_info import WARRANT_KEY, add_warrant_key, load_raw_table
 
 # Terms carried on every row. Missing values are forward-filled within a
@@ -216,8 +223,8 @@ def scheduled_expiry_dates(cache_directory: Path, dim_warrant: pd.DataFrame) -> 
         }
     )
     fallback['current_exercise_end_date'] = fallback['scheduled_exercise_end_date']
-    tej_basic_path = cache_directory / 'tej_seed' / 'basic_info.parquet'
-    if not tej_basic_path.exists():
+    tej_basic_path = find_tej_seed(TEJ_BASIC_INFO_GLOB)
+    if tej_basic_path is None:
         return fallback
 
     tej = pd.read_parquet(
@@ -422,18 +429,20 @@ def chain_events(
     return history
 
 
-def build_term_history(cache_directory: Path, dim_warrant: pd.DataFrame) -> pd.DataFrame:
-    tej_adjustment_path = cache_directory / 'tej_seed' / 'adjustment.parquet'
+def build_history(cache_directory: Path, dim_warrant: pd.DataFrame) -> pd.DataFrame:
+    tej_adjustment_path = find_tej_seed(TEJ_ADJUSTMENT_GLOB)
     frames = []
     seed_end_date = pd.Timestamp.min
 
-    if tej_adjustment_path.exists():
+    if tej_adjustment_path is not None:
+        print(f'TEJ seed: {tej_adjustment_path}')
         tej_events = events_from_tej(tej_adjustment_path, dim_warrant)
         seed_end_date = tej_events['effective_date'].max()
         frames.append(tej_events)
         print(f'TEJ seed ends {seed_end_date.date()}')
     else:
-        print(f'WARNING: {tej_adjustment_path} missing -- history will be MOPS-only (~5% coverage)')
+        print(f'WARNING: no {TEJ_ADJUSTMENT_GLOB} in the TEJ seed dir'
+              ' -- history will be MOPS-only (~5% coverage)')
 
     frames.append(events_from_announcements(cache_directory))
     frames.append(events_from_mops_strike(cache_directory, seed_end_date))
@@ -458,17 +467,18 @@ def build_term_history(cache_directory: Path, dim_warrant: pd.DataFrame) -> pd.D
 
 def main() -> None:
     parser = argparse.ArgumentParser(description='Build point-in-time warrant term history.')
-    parser.add_argument('--cache-dir', default='cache')
+    parser.add_argument('--cache-dir', default=None,
+                        help=f'default: $DATA_SDK_WARRANT_CACHE_PATH or {DEFAULT_CACHE_PATH}')
     parser.add_argument('--out', default=None)
     arguments = parser.parse_args()
 
-    cache_directory = Path(arguments.cache_dir)
+    cache_directory = cache_dir(arguments.cache_dir)
     out_path = (
-        Path(arguments.out) if arguments.out else cache_directory / 'warrant_term_history.parquet'
+        Path(arguments.out) if arguments.out else cache_directory / 'warrant_history.parquet'
     )
 
     dim_warrant = pd.read_parquet(cache_directory / 'warrant_basic_info.parquet')
-    history = build_term_history(cache_directory, dim_warrant)
+    history = build_history(cache_directory, dim_warrant)
     history.to_parquet(out_path, index=False)
     print(f'wrote {len(history):,} rows for {len(history[WARRANT_KEY].drop_duplicates()):,} warrants -> {out_path}')
 

@@ -24,6 +24,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from . import DEFAULT_CACHE_PATH, cache_directory as cache_dir
 from .build_basic_info import WARRANT_KEY
 
 RAW_WARRANT_KEY = ['warrant_id', 'exercise_end_date']
@@ -155,7 +156,7 @@ def check_curated_layer(cache_directory: Path) -> None:
     otherwise the event chain lost or gained a change somewhere.
     """
     dimension_path = cache_directory / 'warrant_basic_info.parquet'
-    history_path = cache_directory / 'warrant_term_history.parquet'
+    history_path = cache_directory / 'warrant_history.parquet'
     if not (dimension_path.exists() and history_path.exists()):
         print('\n== curated layer ==\n  [SKIP] build_basic_info / build_history have not run')
         return
@@ -164,7 +165,7 @@ def check_curated_layer(cache_directory: Path) -> None:
     dimension = pd.read_parquet(dimension_path)
     history = pd.read_parquet(history_path)
     warrant_count = len(history[WARRANT_KEY].drop_duplicates())
-    print(f'  dim_warrant {len(dimension):,} rows | term_history {len(history):,} rows'
+    print(f'  dim_warrant {len(dimension):,} rows | warrant_history {len(history):,} rows'
           f' for {warrant_count:,} warrants')
 
     report('every warrant has history',
@@ -214,9 +215,10 @@ def check_curated_layer(cache_directory: Path) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description='Validate raw MOPS warrant tables.')
-    parser.add_argument('--cache-dir', default='cache')
+    parser.add_argument('--cache-dir', default=None,
+                        help=f'default: $DATA_SDK_WARRANT_CACHE_PATH or {DEFAULT_CACHE_PATH}')
     arguments = parser.parse_args()
-    cache_directory = Path(arguments.cache_dir)
+    cache_directory = cache_dir(arguments.cache_dir)
 
     basic_info = load_table(cache_directory, 'warrant_basic_info')
     adjustment = load_table(cache_directory, 'warrant_strike_ratio_adjustment')
