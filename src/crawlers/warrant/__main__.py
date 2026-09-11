@@ -9,9 +9,12 @@ merge/upsert support, and therefore no SQL-capable destination, is needed.
 from __future__ import annotations
 
 import argparse
+import errno
+import time
 from pathlib import Path
 
 import dlt
+from dlt.common.storages.file_storage import FileStorage
 
 from . import DEFAULT_CACHE_PATH, cache_directory as cache_dir
 from .warrant_reports import HISTORY_START_YEAR, warrant_reports_source
@@ -25,6 +28,42 @@ RESOURCE_NAMES = [
 ]
 
 
+# TODO: workaround. Remove once `fsc` is off the NFS mount or dlt retries upstream.
+def patch_dlt_rmtree_for_nfs(
+    retry_delays_seconds: tuple[float, ...] = (0.5, 1, 2, 4, 8, 16, 32),
+) -> None:
+    """Retry dlt's package-folder delete while NFS silly-renamed files linger.
+
+    dlt commits a load package and then ``shutil.rmtree``s the extracted copy
+    with no retry. On the NFS mount holding the cache dir (``fsc`` on) a file
+    closed moments earlier is silly-renamed to ``.nfs*`` at unlink time and
+    the rmtree fails -- ``ENOTEMPTY`` on the directory, or ``EBUSY`` when it
+    reaches the ``.nfs*`` entry itself. The entry clears on its own: ~15 ms
+    on an idle box, but measured at 1-30 s while other jobs hammer the same
+    mount (load average in the hundreds). Hence the long backoff, ~64 s in
+    total; a cron job deleting a handful of packages can afford it.
+
+    ``FileStorage.delete_folder`` is the one exit every ``delete_package``
+    call goes through, so patching it covers all of them. Remove once dlt
+    retries upstream.
+    """
+    original_delete_folder = FileStorage.delete_folder
+    transient_errnos = {errno.ENOTEMPTY, errno.EBUSY}
+
+    def delete_folder_with_retry(self, relative_path, recursively=False, delete_ro=False):
+        for attempt, delay_seconds in enumerate([*retry_delays_seconds, None]):
+            try:
+                return original_delete_folder(self, relative_path, recursively, delete_ro)
+            except OSError as error:
+                is_last_attempt = delay_seconds is None
+                if error.errno not in transient_errnos or is_last_attempt:
+                    raise
+                print(f'delete of {relative_path} hit {error}; retry {attempt + 1} in {delay_seconds}s')
+                time.sleep(delay_seconds)
+
+    FileStorage.delete_folder = delete_folder_with_retry
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description='Crawl TWSE MOPS warrant reports into raw parquet tables.')
     parser.add_argument('--cache-dir', default=None,
@@ -36,6 +75,7 @@ def main() -> None:
     arguments = parser.parse_args()
 
     cache_directory = cache_dir(arguments.cache_dir)
+    patch_dlt_rmtree_for_nfs()
     pipeline = dlt.pipeline(
         pipeline_name='mops_warrant_reports',
         destination=dlt.destinations.filesystem(
