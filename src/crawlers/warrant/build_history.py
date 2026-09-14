@@ -343,7 +343,7 @@ def events_from_snapshot_diff(
 
     snapshot = add_warrant_key(snapshot, 'warrant_id', 'warrant_name')
     crawl_date = pd.to_datetime(snapshot['crawl_date']).max()
-    current_terms = snapshot[WARRANT_KEY + ['latest_strike', 'alloc_qty_per_1k']]
+    current_terms = snapshot[WARRANT_KEY + ['latest_strike', 'alloc_qty_per_1k', 'exercise_end_date']]
     current_terms = current_terms.drop_duplicates(subset=WARRANT_KEY, keep='last')
 
     last_events = (
@@ -360,10 +360,15 @@ def events_from_snapshot_diff(
     if unexplained.empty:
         return empty_events()
 
+    # Dated at the crawl, or at expiry if the warrant has already expired:
+    # the snapshot still lists it for a few days after, and an ex-dividend
+    # between its last trading day and expiry (t95sb02 rarely records those)
+    # is exactly what its settlement terms then reflect.
+    effective_date = pd.to_datetime(unexplained['exercise_end_date']).clip(upper=crawl_date)
     diff_events = pd.DataFrame({
         'warrant_id': unexplained['warrant_id'],
         'warrant_name': unexplained['warrant_name'],
-        'effective_date': crawl_date,
+        'effective_date': effective_date.fillna(crawl_date),
         'sequence': 9,
         'strike': unexplained['latest_strike'],
         'ratio': unexplained['snapshot_ratio'],
@@ -371,7 +376,8 @@ def events_from_snapshot_diff(
     })
     diff_events['source'] = 'mops_snapshot'
     diff_events['source_rank'] = 5
-    print(f'snapshot diffs no event explained: {len(diff_events):,} (dated {crawl_date.date()})')
+    print(f'snapshot diffs no event explained: {len(diff_events):,}'
+          f' ({int((effective_date < crawl_date).sum()):,} on an already-expired warrant, dated at its expiry)')
     return diff_events
 
 
