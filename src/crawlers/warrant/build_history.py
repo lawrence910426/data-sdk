@@ -27,11 +27,14 @@ Sources, in precedence order on a ``(warrant_id, warrant_name, effective_date)``
 | 4 | synthesised issuance from the dimension table | warrants absent from TEJ | New listings, and the 2019 cohort predating the TEJ window. |
 | 5 | ``mops_raw/warrant_active_snapshot`` diff | anything the above missed | Today's terms for a warrant whose change fell in a period no event source covers, dated at the crawl. |
 
-Reset events (t95sb03) are not modelled as separate rows: a reset always takes
-effect on or before the listing day (verified -- 2,646 of 2,692 exactly on
-``list_date``, the rest 3 days earlier, none after), so no trading day is ever
-priced against the pre-reset strike. What matters is that the *issuance* row
-carries the post-reset strike, which the TEJ listing row already does.
+**Rows can predate ``list_date``.** The issuance row sits on the issue date,
+2-4 days before listing, and a reset-type warrant's reset lands on or just
+before the listing day (2,646 of 2,692 MOPS resets exactly on ``list_date``,
+the rest up to 3 days earlier; TEJ dates 1,443 of them to the day before).
+Both are kept as dated: the reset is the state that traded from day one, and
+the issuance row before it carries the pre-reset strike. Whether a date is
+tradable is the reader's concern -- ``list_date`` is on every row, and
+``WarrantInfoWrapper.get_warrant_history(as_of=...)`` already filters on it.
 
 Usage:
     python -m data_sdk.crawlers.warrant.build_history --cache-dir cache
@@ -88,12 +91,14 @@ def empty_events() -> pd.DataFrame:
 def events_from_tej(tej_adjustment_path: Path, dim_warrant: pd.DataFrame) -> pd.DataFrame:
     """TEJ's per-state rows -> events (rank 1).
 
-    Two quirks handled here. The ``上市櫃`` row is dated the *issue* date, 2-4
-    days before listing, so its date is replaced by the warrant's ``list_date``
-    -- there is no trading before then and an event predating the listing would
-    open a phantom period. And TEJ labels every strike move ``重設`` regardless
-    of whether it was a genuine reset or an ex-rights adjustment, so the label is
-    mapped to a neutral ``change`` rather than pretending to know which.
+    Dates are kept as TEJ records them: the ``上市櫃`` row on the *issue*
+    date (2-4 days before listing) and a reset on the day it took effect,
+    which for 1,443 warrants is the day before listing. Both are real states
+    -- the issue-time strike, then the reset one that traded from day one --
+    and whether a date is tradable is the reader's concern (``list_date`` is
+    on every row). TEJ labels every strike move ``重設`` regardless of whether
+    it was a genuine reset or an ex-rights adjustment, so the label is mapped
+    to a neutral ``change`` rather than pretending to know which.
     """
     tej = pd.read_parquet(
         tej_adjustment_path,
@@ -113,16 +118,9 @@ def events_from_tej(tej_adjustment_path: Path, dim_warrant: pd.DataFrame) -> pd.
     })
     events['source'] = 'tej'
     events['source_rank'] = 1
-
-    listing_dates = dim_warrant[WARRANT_KEY + ['list_date']]
-    events = events.merge(listing_dates, on=WARRANT_KEY, how='left')
     is_issuance = events['event_type'] == 'issuance'
-    has_listing_date = events['list_date'].notna()
-    events.loc[is_issuance & has_listing_date, 'effective_date'] = events.loc[
-        is_issuance & has_listing_date, 'list_date'
-    ]
     print(f'TEJ events: {len(events):,} ({int(is_issuance.sum()):,} issuance)')
-    return events.drop(columns=['list_date'])
+    return events
 
 
 def events_from_mops_strike(cache_directory: Path, seed_end_date: pd.Timestamp) -> pd.DataFrame:
@@ -384,13 +382,13 @@ def chain_events(
     is_known = [key in known_warrants for key in zip(events['warrant_id'], events['warrant_name'])]
     events = events[pd.Series(is_known, index=events.index)]
 
-    # An event dated before the warrant existed is join noise on a recycled code.
+    # Events before list_date are kept: the issuance on the issue date and any
+    # reset/adjustment applied between issue and first trade are real states.
+    # Only the count is reported, as a tripwire for join noise on a recycled code.
     listing_dates = dim_warrant[WARRANT_KEY + ['list_date']]
-    events = events.merge(listing_dates, on=WARRANT_KEY, how='left')
-    before_listing = events['effective_date'] < events['list_date']
-    if before_listing.any():
-        print(f'dropped {int(before_listing.sum()):,} events dated before list_date')
-    events = events[~before_listing].drop(columns=['list_date'])
+    with_listing = events.merge(listing_dates, on=WARRANT_KEY, how='left')
+    before_listing = with_listing['effective_date'] < with_listing['list_date']
+    print(f'events dated before list_date (kept): {int(before_listing.sum()):,}')
 
     # Two rows can share a moment for two different reasons, resolved in order:
     #   1. A reset-type warrant's strike is reset on its own listing day, so the
@@ -490,13 +488,7 @@ def build_history(cache_directory: Path, dim_warrant: pd.DataFrame) -> pd.DataFr
         if column not in events.columns:
             events[column] = pd.NA
 
-    # A warrant counts as covered only by events on or after its list_date:
-    # chain_events drops earlier ones (an adjustment applied before listing),
-    # and a warrant whose only event is such a one would otherwise end up
-    # with no history at all.
-    dated = events.merge(dim_warrant[WARRANT_KEY + ['list_date']], on=WARRANT_KEY, how='left')
-    on_or_after_listing = dated['list_date'].isna() | (dated['effective_date'] >= dated['list_date'])
-    covered_keys = set(zip(dated.loc[on_or_after_listing, 'warrant_id'], dated.loc[on_or_after_listing, 'warrant_name']))
+    covered_keys = set(zip(events['warrant_id'], events['warrant_name']))
     events = pd.concat([events, events_from_dim(dim_warrant, covered_keys)], ignore_index=True)
     events = pd.concat(
         [events, events_from_snapshot_diff(cache_directory, dim_warrant, events)],

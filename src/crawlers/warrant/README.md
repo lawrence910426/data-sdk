@@ -6,8 +6,8 @@ exercise ratio and maturity all move during its life.
 
 ## Layers
 
-Row counts below are from the 2026-09-09 build: 649,401 warrants (expiries
-2003-01-22 to 2028-09-11), 930,039 history rows.
+Row counts below are from the 2026-09-14 build: 650,559 warrants (expiries
+2003-01-22 to 2028-09-15), 968,175 history rows.
 
 ```
 <cache-dir>/
@@ -58,8 +58,9 @@ before the current warrant listed.
 **Keep the trailing filter.** An as-of join has no idea a warrant expires and
 will happily return the final terms for a date years afterwards. Filtering on
 the matched row's own `exercise_end_date` is what makes the answer "as known at
-the time". The other side needs no guard: a date before the listing matches
-nothing and comes back null.
+the time". On the other side, rows start at the *issue* date, 2-4 days before
+`list_date`; there are no quotes to join in that gap, but add
+`pl.col('date') >= pl.col('list_date')` if the input can carry such dates.
 
 There is no `valid_to` — "the latest row at or before this date" already defines
 the interval. Current terms are `history.filter(pl.col('is_current'))`, which is
@@ -74,26 +75,26 @@ effective_date, sequence)`.
 |---|---|---|---|
 | `warrant_id` | str | 0 | 權證代號，已去掉回收尾碼。**單獨不唯一**，見上面的 key 說明 |
 | `warrant_name` | str | 0 | 權證簡稱，如 `台光電元大5B購02`。key 的另一半 |
-| `effective_date` | datetime | 2,476 | 此狀態生效日，as-of join 用這欄。`expiry_change` 例外：填的是**公告日**，不是新到期日生效那天。空值 = 該檔 `list_date` 未知（見下） |
+| `effective_date` | datetime | 2,476 | 此狀態生效日，as-of join 用這欄。issuance 列是**發行日**，比 `list_date` 早 2-4 天；重設型權證的重設多半在上市前一天，也照實際日期放。要「可交易」語意請自己加 `list_date <= date`（wrapper 的 `as_of` 已有）。`expiry_change` 例外：填的是**公告日**，不是新到期日生效那天。空值 = 該檔 `list_date` 未知（見下） |
 | `sequence` | int | 0 | 同一天多個事件的排序。`0` = 合成的 issuance、`1` = 一般、`2`+ = TEJ 原本的序號 |
 | **狀態欄（as-of 取值）** | | | |
 | `strike` | float | 0 | 履約價。重設型權證此欄為**重設後**的值 |
 | `ratio` | float | 0 | 行使比例，每單位權證可換股數（= `alloc_qty_per_1k / 1000`） |
-| `cap` | float | 928,569 | 上限價。只有牛熊証與 43 檔展延型有值 |
-| `floor` | float | 928,809 | 下限價。同上族群。展延型的**上限**價被 MOPS 填在這欄，是它自己的欄位語意問題，不是解析錯誤 |
+| `cap` | float | 966,705 | 上限價。只有牛熊証與 43 檔展延型有值 |
+| `floor` | float | 966,947 | 下限價。同上族群。展延型的**上限**價被 MOPS 填在這欄，是它自己的欄位語意問題，不是解析錯誤 |
 | `exercise_end_date` | datetime | 0 | 到期日／履約截止日（台灣權證兩者同日，歐式權證實測 100% 相等）。提前到期時會變動 |
 | `last_trade_date` | datetime | 72 | 最後交易日，隨到期日一起變動。72 列空值是 2003-04 MOPS 本身空白 |
 | **來源欄** | | | |
-| `event_type` | str | 0 | `issuance` 611,840 · `change` 313,328 · `expiry_change` 2,817 · `snapshot_diff` 1,509 · `adjustment` 508 · `reset` 37 |
-| `source` | str | 0 | `tej` 680,142 · `dim_synthesised` 245,026 · `mops_announcement` 2,817 · `mops_snapshot` 1,509 · `mops_strike` 545 |
+| `event_type` | str | 0 | `issuance` 648,400 · `change` 314,771 · `expiry_change` 2,869 · `adjustment` 1,566 · `snapshot_diff` 497 · `reset` 72 |
+| `source` | str | 0 | `tej` 717,018 · `dim_synthesised` 246,153 · `mops_announcement` 2,869 · `mops_strike` 1,638 · `mops_snapshot` 497 |
 | `source_rank` | int | 0 | 兩個來源描述同一時點時的優先序：1 TEJ、2 公告、3 MOPS 事件、4 合成、5 snapshot diff |
 | `is_current` | bool | 0 | 是否為該檔最後一列。每檔恰好一列為 True |
 | **靜態欄（同一檔每列相同）** | | | |
 | `issuer` | str | 0 | 發行商，如 `凱基` |
-| `type` | str | 20 | `認購` 799,946 · `認售` 130,073。20 列空值是 2003-04 MOPS 本身空白 |
+| `type` | str | 20 | `認購` 834,577 · `認售` 133,578。20 列空值是 2003-04 MOPS 本身空白 |
 | `target_stock_id` | str | 0 | 標的代號。指數權證是 `IX0001`，ETF 是 `00xxx` |
 | `target_name` | str | 0 | 標的名稱 |
-| `market` | str | 0 | `twse` 714,650 · `otc` 215,389 |
+| `market` | str | 0 | `twse` 740,491 · `otc` 227,684 |
 | `list_date` | datetime | 2,476 | 上市日。MOPS 壞成 2023-12-26 的 51,537 檔（幾乎全是 2011-2019 到期的上櫃權證）：19,932 用 TEJ 修、48,647 用 FinMind 修、2,476 兩邊都沒有 → 空值。來源標在 dim 表的 `list_date_source` |
 | `exercise_start_date` | datetime | 2,072 | 履約開始日。美式等於 `list_date`，歐式等於 `exercise_end_date`。空值同上 |
 | `original_strike` | float | 0 | 發行時履約價，**重設前**的值。重設型權證不能拿來當可交易的履約價，要用 `strike` |
