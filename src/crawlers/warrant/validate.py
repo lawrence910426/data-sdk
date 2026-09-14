@@ -164,7 +164,13 @@ def check_curated_layer(cache_directory: Path) -> None:
         return
 
     print('\n== curated layer ==')
+    # The history leaves bull/bear and extendable warrants out by design (build_history).
     dimension = pd.read_parquet(dimension_path)
+    is_excluded = (
+        dimension['is_bull_bear'].fillna(False).astype(bool)
+        | dimension['is_extendable'].fillna(False).astype(bool)
+    )
+    dimension = dimension[~is_excluded]
     history = pd.read_parquet(history_path)
     warrant_count = len(history[WARRANT_KEY].drop_duplicates())
     print(f'  dim_warrant {len(dimension):,} rows | warrant_history {len(history):,} rows'

@@ -65,6 +65,13 @@ def fetch_openapi_terms() -> pd.DataFrame:
         frames.append(frame)
 
     published = pd.concat(frames, ignore_index=True)
+    # The history leaves bull/bear and extendable warrants out (see
+    # build_history); the exchange lists them, so drop them here or they
+    # count as missing. Same name rules as build_basic_info.
+    names = published['權證簡稱'].astype(str)
+    is_excluded = names.str.contains('牛|熊', regex=True) | names.str.contains(r'展\d{2}$', regex=True)
+    print(f'  excluding {int(is_excluded.sum()):,} bull/bear and extendable warrants')
+    published = published[~is_excluded]
     return pd.DataFrame({
         'warrant_id': published['權證代號'].astype(str).str[:6],
         'warrant_name': published['權證簡稱'].astype(str).str.strip(),

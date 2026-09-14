@@ -74,7 +74,6 @@ STATIC_COLUMNS = [
     'list_date',
     'exercise_start_date',
     'original_strike',
-    'is_bull_bear',
     'is_american',
 ]
 EVENT_COLUMNS = WARRANT_KEY + ['effective_date', 'sequence'] + STATE_COLUMNS + [
@@ -471,6 +470,17 @@ def chain_events(
 
 
 def build_history(cache_directory: Path, dim_warrant: pd.DataFrame) -> pd.DataFrame:
+    # Bull/bear certificates and extendable warrants are not a trading target
+    # and their terms (knock-out barrier and financing cost; a maturity that
+    # moves by extension) do not fit this table's model. They stay in the
+    # dimension table, flagged, and are left out of the history entirely.
+    is_excluded = (
+        dim_warrant['is_bull_bear'].fillna(False).astype(bool)
+        | dim_warrant['is_extendable'].fillna(False).astype(bool)
+    )
+    print(f'excluding {int(is_excluded.sum()):,} bull/bear and extendable warrants from the history')
+    dim_warrant = dim_warrant[~is_excluded]
+
     tej_adjustment_path = find_tej_seed(TEJ_ADJUSTMENT_GLOB)
     frames = []
     seed_end_date = pd.Timestamp.min

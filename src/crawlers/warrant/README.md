@@ -6,8 +6,9 @@ exercise ratio and maturity all move during its life.
 
 ## Layers
 
-Row counts below are from the 2026-09-14 build: 650,559 warrants (expiries
-2003-01-22 to 2028-09-15), 969,365 history rows.
+Row counts below are from the 2026-09-14 build: 648,811 warrants (expiries
+2003-01-22 to 2028-09-15; 650,559 in the dimension table including
+bull/bear), 967,616 history rows.
 
 ```
 <cache-dir>/
@@ -80,30 +81,30 @@ effective_date, sequence)`.
 | **狀態欄（as-of 取值）** | | | |
 | `strike` | float | 0 | 履約價。重設型權證此欄為**重設後**的值 |
 | `ratio` | float | 0 | 行使比例，每單位權證可換股數（= `alloc_qty_per_1k / 1000`） |
-| `cap` | float | 966,705 | 上限價。只有牛熊証與 43 檔展延型有值 |
-| `floor` | float | 966,947 | 下限價。同上族群。展延型的**上限**價被 MOPS 填在這欄，是它自己的欄位語意問題，不是解析錯誤 |
+| `cap` | float | 966,897 | 上限價。只有 43 檔展延型與 2010 前的上限型認購有值 |
+| `floor` | float | 966,195 | 下限價。同上族群。展延型的**上限**價被 MOPS 填在這欄，是它自己的欄位語意問題，不是解析錯誤 |
 | `exercise_end_date` | datetime | 0 | 到期日／履約截止日（台灣權證兩者同日，歐式權證實測 100% 相等）。提前到期時會變動 |
 | `last_trade_date` | datetime | 72 | 最後交易日，隨到期日一起變動。72 列空值是 2003-04 MOPS 本身空白 |
 | **來源欄** | | | |
-| `event_type` | str | 0 | `issuance` 648,252 · `change` 314,771 · `adjustment` 2,884 · `expiry_change` 2,869 · `snapshot_diff` 437 · `reset` 152 |
-| `source` | str | 0 | `tej` 717,018 · `dim_synthesised` 246,005 · `mops_strike` 3,036 · `mops_announcement` 2,869 · `mops_snapshot` 437 |
+| `event_type` | str | 0 | `issuance` 646,562 · `change` 314,771 · `adjustment` 2,883 · `expiry_change` 2,869 · `snapshot_diff` 437 · `reset` 94 |
+| `source` | str | 0 | `tej` 717,018 · `dim_synthesised` 244,315 · `mops_strike` 2,977 · `mops_announcement` 2,869 · `mops_snapshot` 437 |
 | `source_rank` | int | 0 | 兩個來源描述同一時點時的優先序：1 TEJ、2 公告、3 MOPS 事件、4 合成、5 snapshot diff |
 | `is_current` | bool | 0 | 是否為該檔最後一列。每檔恰好一列為 True |
 | **靜態欄（同一檔每列相同）** | | | |
 | `issuer` | str | 0 | 發行商，如 `凱基` |
-| `type` | str | 20 | `認購` 834,577 · `認售` 133,578。20 列空值是 2003-04 MOPS 本身空白 |
+| `type` | str | 20 | `認購` 834,770 · `認售` 132,826。20 列空值是 2003-04 MOPS 本身空白 |
 | `target_stock_id` | str | 0 | 標的代號。指數權證是 `IX0001`，ETF 是 `00xxx` |
 | `target_name` | str | 0 | 標的名稱 |
-| `market` | str | 0 | `twse` 740,491 · `otc` 227,684 |
+| `market` | str | 0 | `twse` 739,940 · `otc` 227,676 |
 | `list_date` | datetime | 2,476 | 上市日。MOPS 壞成 2023-12-26 的 51,537 檔（幾乎全是 2011-2019 到期的上櫃權證）：19,932 用 TEJ 修、48,647 用 FinMind 修、2,476 兩邊都沒有 → 空值。來源標在 dim 表的 `list_date_source` |
 | `exercise_start_date` | datetime | 2,072 | 履約開始日。美式等於 `list_date`，歐式等於 `exercise_end_date`。空值同上 |
 | `original_strike` | float | 0 | 發行時履約價，**重設前**的值。重設型權證不能拿來當可交易的履約價，要用 `strike` |
-| `is_bull_bear` | bool | 0 | 牛證/熊證標記，1,748 檔。研究時排除 |
 | `is_american` | bool | 2,476 | 美式（上市日起可履約）vs 歐式（只能到期日履約）。`list_date` 未知時為空值。**沒有任何來源對全母體標示這件事**（`t90sb01` 無此欄、交易所 OpenAPI 也沒有、TEJ 的 `權證類型` 與 `t95sb02` 的 `exercise_method` 只涵蓋部分），所以由日期推導：`exercise_start_date == list_date`。對 TEJ 有涵蓋的 418,527 檔驗證 100% 吻合、零例外 |
 
 `warrant_basic_info.parquet`（dim 表）是一檔一列的現況表，靜態欄相同，另有現行的
-`latest_strike` / `alloc_qty_per_1k` / `exercise_end_date`，以及三個來源標記
-`list_date_source`、`exercise_start_date_source`、`term_source`。
+`latest_strike` / `alloc_qty_per_1k` / `exercise_end_date`、三個來源標記
+`list_date_source`、`exercise_start_date_source`、`term_source`，以及
+`is_bull_bear` / `is_extendable`（牛熊證、展延型，history 不收，dim 保留並標記）。
 
 ## Refreshing
 
@@ -168,15 +169,14 @@ identifier both vendors share.
   current view.
 - **2003-2004**: MOPS's oldest rows are patchy -- 20 lack a type, 72 lack a
   last trading day, 4-digit codes (`0680`). Kept as served.
-- **Extensions (展延)**: not modelled. The announcement document names an
-  ambiguous date — `03029X`'s 2026-09-07 extension names 2026-03-04, six months
-  in the past — so extension rows are dropped rather than guessed at. Affects
-  only the 43 extendable warrants, which studies exclude anyway.
-- **Bull/bear certificates (牛證/熊證)**: 1,748 warrants, flagged `is_bull_bear`.
-  TEJ never covers them, so their history is MOPS-only (t95sb02/t95sb03, a
-  rolling ~18 months).
-- **Cap/floor**: not carried on history rows. Outside bull/bear only 43 warrants
-  have them.
+- **Bull/bear certificates (牛證/熊證) and extendable warrants (展延型)**: not in
+  the history at all. Neither is a trading target, and their terms (knock-out
+  barrier and financing cost; a maturity that moves by extension, announced
+  with an ambiguous date) do not fit the strike/ratio model. The 1,748 and 104
+  of them stay in `warrant_basic_info`, flagged `is_bull_bear` /
+  `is_extendable`.
+- **Cap/floor**: carried only where MOPS publishes them, which after the
+  exclusions above means pre-2010 capped calls.
 - **Early terminations before ~2026-01**: `t95sb01` keeps a rolling ~8 months, so
   roughly 3,000 historical early terminations have no announcement date. Their
   history shows the original maturity until the final row.

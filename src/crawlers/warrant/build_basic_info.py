@@ -281,6 +281,12 @@ def build_dim_warrant(cache_directory: Path) -> pd.DataFrame:
     # Bull/bear certificates (牛證/熊證) behave differently and TEJ never covers
     # them, so downstream studies exclude them -- flag rather than drop.
     basic['is_bull_bear'] = basic['warrant_name'].str.contains('牛|熊', regex=True, na=False)
+    # Extendable warrants (展延型): 104 warrants, 2014-2019, named ``<series>展NN``
+    # (元展06, 富展01, 永豐金元大61展01). 大展證券's 2005-08 plain warrants share
+    # the suffix (大展01) and are told apart by issuer. Also excluded from
+    # the history: their maturity moves by extension, which is not modelled.
+    ends_in_extension_series = basic['warrant_name'].str.contains(r'展\d{2}$', regex=True, na=False)
+    basic['is_extendable'] = ends_in_extension_series & (basic['issuer'] != '大展')
 
     # Exercise style, which no source states for the whole population: t90sb01
     # has no such column, the exchange OpenAPI has none either, and TEJ's

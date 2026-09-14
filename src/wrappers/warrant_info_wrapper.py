@@ -95,6 +95,8 @@ class WarrantInfoWrapper:
         One row per warrant, from data_sdk.crawlers.warrant's built tables
         (MOPS + TEJ, point-in-time) instead of FinMind — strike/ratio are real
         (get_warrant_summary()'s are 0), expiry stays current, no token needed.
+        Bull/bear certificates (牛證/熊證) and extendable warrants (展延型)
+        are not included.
 
         Every column of warrant_history.parquet is returned as-is:
           warrant_id        (str)   recycling suffix stripped; not unique alone
@@ -107,7 +109,7 @@ class WarrantInfoWrapper:
           source            (str)   tej | mops_strike | mops_announcement | mops_snapshot | dim_synthesised
           source_rank       (int)   precedence used to resolve same-moment rows
           exercise_end_date (date)
-          cap / floor       (float) bull/bear + extendable warrants only
+          cap / floor       (float) pre-2010 capped calls only
           last_trade_date   (date)
           issuer            (str)
           type              (str)   "認購" (call) | "認售" (put)
@@ -118,7 +120,6 @@ class WarrantInfoWrapper:
                                      TEJ nor FinMind could repair it
           exercise_start_date (date) same
           original_strike   (float) strike at issuance, pre-reset
-          is_bull_bear      (bool)  牛證/熊證 flag
           is_american       (bool)  exercisable from listing, not only at
                                      maturity; derived from the dates, null
                                      when list_date is
