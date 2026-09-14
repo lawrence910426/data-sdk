@@ -159,3 +159,61 @@ class WarrantInfoWrapper:
             ).drop_duplicates(subset=["warrant_id", "warrant_name"], keep="last")
 
         return summary.reset_index(drop=True)
+
+    def get_warrant_terms(
+        self,
+        frame,
+        date_col: str = "date",
+        warrant_col: str = "warrant_id",
+        cache_dir: Optional[str | Path] = None,
+        refresh: bool = False,
+    ):
+        """
+        The terms in force for every (warrant, date) row of `frame`: an as-of
+        join of warrant_history on `warrant_col` (the code alone -- the
+        incarnation is resolved by the date, since a recycled code's lives do
+        not overlap). Rows whose date falls outside [list_date,
+        exercise_end_date] get null terms.
+
+        `frame` is pandas or polars and comes back the same type, same row
+        order, with the history columns appended (warrant_name, strike, ratio,
+        exercise_end_date, last_trade_date, issuer, type, target_stock_id,
+        list_date, is_american, effective_date, ...). `date_col` may be str
+        "YYYY-MM-DD", date or datetime.
+        """
+        import polars as pl
+
+        self.get_warrant_history(cache_dir=cache_dir, refresh=refresh)  # loads/refreshes the cache
+        history = pl.from_pandas(self._history_cache.drop(columns=["is_current"]))
+        term_columns = [c for c in history.columns if c not in (warrant_col,)]
+
+        is_pandas = isinstance(frame, pd.DataFrame)
+        left = pl.from_pandas(frame) if is_pandas else frame
+        left = left.with_row_index("_row").with_columns(
+            pl.col(warrant_col).cast(pl.Utf8),
+            pl.col(date_col).cast(pl.Utf8).str.slice(0, 10).str.strptime(pl.Datetime("ns"), "%Y-%m-%d").alias("_date"),
+        )
+        clash = [c for c in term_columns if c in left.columns]
+        history = history.drop(clash)
+        term_columns = [c for c in term_columns if c not in clash]
+
+        joined = (
+            left.sort("_date")
+            .join_asof(
+                history.sort("effective_date"),
+                left_on="_date",
+                right_on="effective_date",
+                by=warrant_col,
+                strategy="backward",
+                check_sortedness=False,  # both sides are sorted above; polars cannot verify per group
+            )
+        )
+        in_life = (pl.col("_date") >= pl.col("list_date")) & (pl.col("_date") <= pl.col("exercise_end_date"))
+        joined = (
+            joined.with_columns([
+                pl.when(in_life).then(pl.col(c)).otherwise(None).alias(c) for c in term_columns
+            ])
+            .sort("_row")
+            .drop(["_row", "_date"])
+        )
+        return joined.to_pandas() if is_pandas else joined
