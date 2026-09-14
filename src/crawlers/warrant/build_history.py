@@ -126,7 +126,7 @@ def events_from_tej(tej_adjustment_path: Path, dim_warrant: pd.DataFrame) -> pd.
 
 
 def events_from_mops_strike(cache_directory: Path, seed_end_date: pd.Timestamp) -> pd.DataFrame:
-    """t95sb02 / t95sb03 rows after the frozen TEJ seed ends (rank 3)."""
+    """t95sb02 / t95sb03 rows from the frozen TEJ seed's last day on (rank 3)."""
     frames = []
     adjustment = load_raw_table(cache_directory, 'warrant_strike_ratio_adjustment')
     if adjustment is not None:
@@ -160,10 +160,12 @@ def events_from_mops_strike(cache_directory: Path, seed_end_date: pd.Timestamp) 
         return empty_events()
 
     events = pd.concat(frames, ignore_index=True)
-    events = events[events['effective_date'] > seed_end_date]
+    # Inclusive: the seed's last day may be partial (an export pulled
+    # mid-day), and a same-day collision is settled by source_rank anyway.
+    events = events[events['effective_date'] >= seed_end_date]
     events['source'] = 'mops_strike'
     events['source_rank'] = 3
-    print(f'MOPS strike events after {seed_end_date.date()}: {len(events):,}')
+    print(f'MOPS strike events from {seed_end_date.date()}: {len(events):,}')
     return events
 
 
@@ -193,7 +195,10 @@ def events_from_announcements(cache_directory: Path) -> pd.DataFrame:
         'warrant_id': announcements['warrant_id'],
         'warrant_name': announcements['warrant_name'],
         'effective_date': announcements['announcement_date'],
-        'sequence': 1,
+        # Sequence 2, after any strike event on the same day: this row carries
+        # only the expiry, and on a shared (date, sequence) the dedup would
+        # keep it over the adjustment and forward-fill a stale strike.
+        'sequence': 2,
         'exercise_end_date': announcements['announced_expiry_date'],
         'event_type': 'expiry_change',
     })
@@ -462,7 +467,15 @@ def build_history(cache_directory: Path, dim_warrant: pd.DataFrame) -> pd.DataFr
     if tej_adjustment_path is not None:
         print(f'TEJ seed: {tej_adjustment_path}')
         tej_events = events_from_tej(tej_adjustment_path, dim_warrant)
-        seed_end_date = tej_events['effective_date'].max()
+        # The seed's end is the last day TEJ actually recorded events on --
+        # taken from the raw 年月日, not from the events, whose issuance rows
+        # have been re-dated to list_date and can sit a few days later. Using
+        # the re-dated maximum once put the end at 09-02 when TEJ stopped on
+        # 09-01, and every MOPS adjustment effective 09-02 (989 of them) was
+        # dropped as "covered by TEJ".
+        seed_end_date = pd.to_datetime(
+            pd.read_parquet(tej_adjustment_path, columns=['年月日'])['年月日']
+        ).max()
         frames.append(tej_events)
         print(f'TEJ seed ends {seed_end_date.date()}')
     else:
@@ -477,7 +490,13 @@ def build_history(cache_directory: Path, dim_warrant: pd.DataFrame) -> pd.DataFr
         if column not in events.columns:
             events[column] = pd.NA
 
-    covered_keys = set(zip(events['warrant_id'], events['warrant_name']))
+    # A warrant counts as covered only by events on or after its list_date:
+    # chain_events drops earlier ones (an adjustment applied before listing),
+    # and a warrant whose only event is such a one would otherwise end up
+    # with no history at all.
+    dated = events.merge(dim_warrant[WARRANT_KEY + ['list_date']], on=WARRANT_KEY, how='left')
+    on_or_after_listing = dated['list_date'].isna() | (dated['effective_date'] >= dated['list_date'])
+    covered_keys = set(zip(dated.loc[on_or_after_listing, 'warrant_id'], dated.loc[on_or_after_listing, 'warrant_name']))
     events = pd.concat([events, events_from_dim(dim_warrant, covered_keys)], ignore_index=True)
     events = pd.concat(
         [events, events_from_snapshot_diff(cache_directory, dim_warrant, events)],
