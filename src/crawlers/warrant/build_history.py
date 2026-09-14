@@ -327,6 +327,7 @@ def events_from_snapshot_diff(
     cache_directory: Path,
     dim_warrant: pd.DataFrame,
     events: pd.DataFrame,
+    scheduled_expiry: pd.DataFrame,
 ) -> pd.DataFrame:
     """Close the gap between the last known event and what MOPS reports today.
 
@@ -343,20 +344,43 @@ def events_from_snapshot_diff(
 
     snapshot = add_warrant_key(snapshot, 'warrant_id', 'warrant_name')
     crawl_date = pd.to_datetime(snapshot['crawl_date']).max()
-    current_terms = snapshot[WARRANT_KEY + ['latest_strike', 'alloc_qty_per_1k', 'exercise_end_date']]
+    current_terms = snapshot[
+        WARRANT_KEY + ['latest_strike', 'alloc_qty_per_1k', 'exercise_end_date', 'last_trade_date']
+    ]
     current_terms = current_terms.drop_duplicates(subset=WARRANT_KEY, keep='last')
 
+    # The last known state per warrant, with expiry forward-filled the way
+    # chain_events will do it: a strike-only event carries no expiry.
+    ordered = events.sort_values(WARRANT_KEY + ['effective_date', 'sequence'])
+    ordered['exercise_end_date'] = pd.to_datetime(ordered['exercise_end_date'], errors='coerce')
+    ordered['exercise_end_date'] = ordered.groupby(WARRANT_KEY)['exercise_end_date'].ffill()
     last_events = (
-        events.sort_values(WARRANT_KEY + ['effective_date', 'sequence'])
-        .groupby(WARRANT_KEY, as_index=False)
-        .last()[WARRANT_KEY + ['strike', 'ratio']]
+        ordered.groupby(WARRANT_KEY, as_index=False)
+        .last()[WARRANT_KEY + ['strike', 'ratio', 'exercise_end_date']]
+        .rename(columns={'exercise_end_date': 'known_exercise_end_date'})
     )
     compared = current_terms.merge(last_events, on=WARRANT_KEY, how='inner')
     compared['snapshot_ratio'] = compared['alloc_qty_per_1k'] / 1000.0
+    compared['exercise_end_date'] = pd.to_datetime(compared['exercise_end_date'])
+    # Strike events carry no expiry, so for most warrants the last known
+    # expiry is the one the chain will seed the first row with: the schedule.
+    compared = compared.merge(
+        scheduled_expiry[WARRANT_KEY + ['scheduled_exercise_end_date']], on=WARRANT_KEY, how='left'
+    )
+    compared['known_exercise_end_date'] = compared['known_exercise_end_date'].fillna(
+        compared['scheduled_exercise_end_date']
+    )
 
     strike_moved = (compared['latest_strike'] - compared['strike']).abs() > 0.01
     ratio_moved = (compared['snapshot_ratio'] - compared['ratio']).abs() > 1e-4
-    unexplained = compared[strike_moved | ratio_moved]
+    # An expiry the snapshot reports that no announcement explained: MOPS
+    # posts a termination on an underlying's delisting under 終止上市/上櫃
+    # rather than 提前終止, which the announcement resource does not read.
+    expiry_moved = (
+        compared['known_exercise_end_date'].notna()
+        & (compared['exercise_end_date'] != compared['known_exercise_end_date'])
+    )
+    unexplained = compared[strike_moved | ratio_moved | expiry_moved]
     if unexplained.empty:
         return empty_events()
 
@@ -372,12 +396,16 @@ def events_from_snapshot_diff(
         'sequence': 9,
         'strike': unexplained['latest_strike'],
         'ratio': unexplained['snapshot_ratio'],
+        'exercise_end_date': unexplained['exercise_end_date'],
+        'last_trade_date': pd.to_datetime(unexplained['last_trade_date']),
         'event_type': 'snapshot_diff',
     })
     diff_events['source'] = 'mops_snapshot'
     diff_events['source_rank'] = 5
+    expiry_only = int((expiry_moved & ~strike_moved & ~ratio_moved).sum())
     print(f'snapshot diffs no event explained: {len(diff_events):,}'
-          f' ({int((effective_date < crawl_date).sum()):,} on an already-expired warrant, dated at its expiry)')
+          f' ({expiry_only:,} expiry only;'
+          f' {int((effective_date < crawl_date).sum()):,} on an already-expired warrant, dated at its expiry)')
     return diff_events
 
 
@@ -447,14 +475,14 @@ def chain_events(
         events[column] = grouped[column].ffill()
 
     # An expiry_change carries only the new expiry, so its last_trade_date was
-    # forward-filled from before the change and can now sit after expiry.
-    # Re-derive it from the warrant's own settlement gap, taken at issuance.
-    settlement_gap = (events['exercise_end_date'] - events['last_trade_date'])
-    issuance_gap = settlement_gap.groupby([events['warrant_id'], events['warrant_name']]).transform('first')
+    # forward-filled from before the change and can now sit after expiry. An
+    # early termination's last trading day is two business days before the new
+    # expiry (every one of the 60 checked against the exchange), so re-derive
+    # it that way; the calendar gap taken at issuance spans weekends and was
+    # off by one or two days on most of them.
     last_trade_date_is_stale = events['last_trade_date'] > events['exercise_end_date']
     events.loc[last_trade_date_is_stale, 'last_trade_date'] = (
-        events.loc[last_trade_date_is_stale, 'exercise_end_date']
-        - issuance_gap[last_trade_date_is_stale]
+        events.loc[last_trade_date_is_stale, 'exercise_end_date'] - 2 * pd.offsets.BDay()
     )
 
     # A handful of TEJ rows are dated a day or two after the warrant expired.
@@ -520,14 +548,14 @@ def build_history(cache_directory: Path, dim_warrant: pd.DataFrame) -> pd.DataFr
 
     covered_keys = set(zip(events['warrant_id'], events['warrant_name']))
     events = pd.concat([events, events_from_dim(dim_warrant, covered_keys)], ignore_index=True)
+    scheduled_expiry = scheduled_expiry_dates(cache_directory, dim_warrant)
     events = pd.concat(
-        [events, events_from_snapshot_diff(cache_directory, dim_warrant, events)],
+        [events, events_from_snapshot_diff(cache_directory, dim_warrant, events, scheduled_expiry)],
         ignore_index=True,
     )
 
     for column in ['exercise_end_date', 'last_trade_date']:
         events[column] = pd.to_datetime(events[column], errors='coerce')
-    scheduled_expiry = scheduled_expiry_dates(cache_directory, dim_warrant)
     return chain_events(events, dim_warrant, scheduled_expiry)
 
 

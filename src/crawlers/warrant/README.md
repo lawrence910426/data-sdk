@@ -178,12 +178,18 @@ identifier both vendors share.
 - **Cap/floor**: carried only where MOPS publishes them, which after the
   exclusions above means pre-2010 capped calls.
 - **Early terminations before ~2026-01**: `t95sb01` keeps a rolling ~8 months, so
-  roughly 3,000 historical early terminations have no announcement date. Their
-  history shows the original maturity until the final row.
-
+  historical early terminations have no announcement date. Their history shows
+  the original maturity on every row, and for 279 of them (mostly 2020-22
+  mergers such as 中壽) the final row's expiry disagrees with
+  `warrant_basic_info`, which holds MOPS's final record. `validate.py`'s
+  "current expiry == dim" line counts them.
+- **Terminations MOPS posts as 終止上市/上櫃, not 提前終止**: an underlying's
+  delisting (健亞, 2026-07) is announced under a type the announcement resource
+  does not read. The snapshot diff catches the new expiry, dated at the crawl
+  or at the expiry itself if already past -- the announcement date is lost.
 - **Leading-edge drift**: the exchange OpenAPI is occasionally fresher than the
-  MOPS snapshot, so ~48 live warrants (0.09%) carry a strike one adjustment
-  behind until the next crawl. `verify_openapi.py` is what surfaces these.
+  MOPS snapshot, so a few live warrants carry a strike one adjustment behind
+  until the next crawl. `verify_openapi.py` is what surfaces these.
 
 `validate.py` and `verify_openapi.py` check all of the above that can be checked;
 `DATA_DICTIONARY.md` holds the field-by-field semantics and the measured gaps
