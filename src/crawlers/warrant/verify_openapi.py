@@ -17,6 +17,7 @@ Exits non-zero if any match rate falls below its threshold.
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -53,12 +54,41 @@ def parse_republic_yyyymmdd(raw_value: object) -> pd.Timestamp:
     )
 
 
+def fetch_json_with_resume(url: str, max_requests: int = 30) -> list:
+    """GET a large JSON body from a server that drops the connection mid-body.
+
+    TPEx's OpenAPI answers 200 with the full Content-Length and then closes
+    after a few hundred KB on most requests (2 of 3 on 2026-09-14). It does
+    honour Range, so the body is collected in pieces: each retry asks for
+    ``bytes=<received>-`` until the declared length is in hand, then the JSON
+    is parsed as the real completeness check.
+    """
+    body = b''
+    declared_length = None
+    for _ in range(max_requests):
+        headers = {'Range': f'bytes={len(body)}-'} if body else {}
+        response = requests.get(url, headers=headers, timeout=REQUEST_TIMEOUT_SECONDS, stream=True)
+        response.raise_for_status()
+        if declared_length is None:
+            declared_length = int(response.headers.get('Content-Length', 0)) or None
+        try:
+            for chunk in response.iter_content(65536):
+                body += chunk
+        except requests.exceptions.ChunkedEncodingError:
+            continue  # partial body kept; the next request resumes from its end
+        if declared_length is None or len(body) >= declared_length:
+            try:
+                return json.loads(body)
+            except json.JSONDecodeError:
+                body = b''  # a corrupt assembly: start over
+                declared_length = None
+    raise RuntimeError(f'{url}: incomplete after {max_requests} requests ({len(body):,} bytes)')
+
+
 def fetch_openapi_terms() -> pd.DataFrame:
     frames = []
     for market_name, url in OPENAPI_ENDPOINTS:
-        response = requests.get(url, timeout=REQUEST_TIMEOUT_SECONDS)
-        response.raise_for_status()
-        records = response.json()
+        records = fetch_json_with_resume(url)
         frame = pd.DataFrame(records)
         frame['market'] = market_name
         print(f'  {market_name}: {len(frame):,} live warrants from the exchange')

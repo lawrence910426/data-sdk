@@ -323,6 +323,11 @@ def events_from_dim(dim_warrant: pd.DataFrame, covered_keys: set[str]) -> pd.Dat
     return events
 
 
+# TODO: MOPS's t90sb01 applies an ex-dividend adjustment a day before it takes
+# effect, so a diff dated at the crawl is a day early (德微, 2026-09-14). Plan:
+# a daily TWSE/TPEx OpenAPI snapshot resource as the diff's reference (the
+# exchange applies on the ex-date), plus t95sb02's future-effective rows for
+# the true dates; MOPS's snapshot becomes verify's reference instead.
 def events_from_snapshot_diff(
     cache_directory: Path,
     dim_warrant: pd.DataFrame,

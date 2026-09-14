@@ -127,7 +127,9 @@ file there and de-duplicates).
 fetches the TWSE and TPEx OpenAPI and compares the current strike, ratio and
 expiry of every live warrant against an independent publication of the same
 facts — the check that catches a stale or misparsed number rather than an
-inconsistent one. It exits non-zero below 98% on any field.
+inconsistent one. It exits non-zero unless every field matches on every
+live warrant; the mismatches are listed so a publisher timing gap (MOPS
+ahead of the exchange on an ex-dividend, or behind) is visible as such.
 
 Curated tables are pure functions of the raw layer and are rebuilt whole each
 run, so there is no build state to keep in sync. The TEJ seed is never touched.
@@ -187,9 +189,14 @@ identifier both vendors share.
   delisting (健亞, 2026-07) is announced under a type the announcement resource
   does not read. The snapshot diff catches the new expiry, dated at the crawl
   or at the expiry itself if already past -- the announcement date is lost.
-- **Leading-edge drift**: the exchange OpenAPI is occasionally fresher than the
-  MOPS snapshot, so a few live warrants carry a strike one adjustment behind
-  until the next crawl. `verify_openapi.py` is what surfaces these.
+- **MOPS applies an adjustment a day early**: t90sb01 shows the post-ex-dividend
+  strike the day before it takes effect, so a `snapshot_diff` on such a day is
+  dated a day early. TODO: reference the exchange OpenAPI snapshot instead and
+  take t95sb02's future-effective rows for the true dates.
+- **Publisher timing**: MOPS and the exchange OpenAPI do not post an
+  adjustment at the same moment -- either can be a day ahead of the other
+  around an ex-dividend date. `verify_openapi.py` fails on any mismatch and
+  lists them; a batch on one underlying that clears the next day is this.
 
 `validate.py` and `verify_openapi.py` check all of the above that can be checked;
 `DATA_DICTIONARY.md` holds the field-by-field semantics and the measured gaps
