@@ -7,7 +7,7 @@ exercise ratio and maturity all move during its life.
 ## Layers
 
 Row counts below are from the 2026-09-14 build: 650,559 warrants (expiries
-2003-01-22 to 2028-09-15), 968,175 history rows.
+2003-01-22 to 2028-09-15), 969,365 history rows.
 
 ```
 <cache-dir>/
@@ -85,8 +85,8 @@ effective_date, sequence)`.
 | `exercise_end_date` | datetime | 0 | 到期日／履約截止日（台灣權證兩者同日，歐式權證實測 100% 相等）。提前到期時會變動 |
 | `last_trade_date` | datetime | 72 | 最後交易日，隨到期日一起變動。72 列空值是 2003-04 MOPS 本身空白 |
 | **來源欄** | | | |
-| `event_type` | str | 0 | `issuance` 648,400 · `change` 314,771 · `expiry_change` 2,869 · `adjustment` 1,566 · `snapshot_diff` 497 · `reset` 72 |
-| `source` | str | 0 | `tej` 717,018 · `dim_synthesised` 246,153 · `mops_announcement` 2,869 · `mops_strike` 1,638 · `mops_snapshot` 497 |
+| `event_type` | str | 0 | `issuance` 648,252 · `change` 314,771 · `adjustment` 2,884 · `expiry_change` 2,869 · `snapshot_diff` 437 · `reset` 152 |
+| `source` | str | 0 | `tej` 717,018 · `dim_synthesised` 246,005 · `mops_strike` 3,036 · `mops_announcement` 2,869 · `mops_snapshot` 437 |
 | `source_rank` | int | 0 | 兩個來源描述同一時點時的優先序：1 TEJ、2 公告、3 MOPS 事件、4 合成、5 snapshot diff |
 | `is_current` | bool | 0 | 是否為該檔最後一列。每檔恰好一列為 True |
 | **靜態欄（同一檔每列相同）** | | | |
@@ -144,7 +144,7 @@ record of anything older.
 | `warrant_active_snapshot` | every live warrant's current expiry / last trade date / latest terms | `warrant_basic_info` records a warrant only once it has expired (swept by 到期日, cursor on `exercise_end_date`), so live warrants would be absent and, once recorded, never re-read |
 | TEJ basic-info export | repairs `list_date`, `exercise_start_date` | MOPS itself serves ~51,500 rows with both set to the literal 2023-12-26 |
 | FinMind warrant summary | the same repair for the ~48,700 corrupted rows expired before TEJ's window (nearly all OTC, 2011-2019) | Their listing date would be null. Matched on code + last trading day; agrees with TEJ to the day on 97.7% of the 19,687 warrants all three sources share |
-| `warrant_strike_ratio_adjustment/_reset` | strike history after the frozen seed | History would stop at the seed date |
+| `warrant_strike_ratio_adjustment/_reset` | strike history after the frozen seed, and all of it for warrants TEJ never covers (bull/bear, extendable, MOPS-only listings) | History would stop at the seed date, and those warrants would carry only their issuance strike |
 
 The key is `(warrant_id, warrant_name)`, where `warrant_id` is the listing code
 with its recycling suffix stripped (MOPS `703055b` and TEJ `703055Y` are the same
@@ -172,8 +172,9 @@ identifier both vendors share.
   ambiguous date — `03029X`'s 2026-09-07 extension names 2026-03-04, six months
   in the past — so extension rows are dropped rather than guessed at. Affects
   only the 43 extendable warrants, which studies exclude anyway.
-- **Bull/bear certificates (牛證/熊證)**: 746 warrants, flagged `is_bull_bear`.
-  TEJ never covers them, so their history is MOPS-only.
+- **Bull/bear certificates (牛證/熊證)**: 1,748 warrants, flagged `is_bull_bear`.
+  TEJ never covers them, so their history is MOPS-only (t95sb02/t95sb03, a
+  rolling ~18 months).
 - **Cap/floor**: not carried on history rows. Outside bull/bear only 43 warrants
   have them.
 - **Early terminations before ~2026-01**: `t95sb01` keeps a rolling ~8 months, so

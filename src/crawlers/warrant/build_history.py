@@ -123,8 +123,15 @@ def events_from_tej(tej_adjustment_path: Path, dim_warrant: pd.DataFrame) -> pd.
     return events
 
 
-def events_from_mops_strike(cache_directory: Path, seed_end_date: pd.Timestamp) -> pd.DataFrame:
-    """t95sb02 / t95sb03 rows from the frozen TEJ seed's last day on (rank 3)."""
+def events_from_mops_strike(
+    cache_directory: Path,
+    seed_end_date: pd.Timestamp,
+    tej_keys: set,
+) -> pd.DataFrame:
+    """t95sb02 / t95sb03 rows (rank 3): from the frozen TEJ seed's last day
+    on, plus everything for warrants TEJ never covers (bull/bear, the
+    extendable ones, MOPS-only listings), whose only strike history is here.
+    """
     frames = []
     adjustment = load_raw_table(cache_directory, 'warrant_strike_ratio_adjustment')
     if adjustment is not None:
@@ -160,10 +167,16 @@ def events_from_mops_strike(cache_directory: Path, seed_end_date: pd.Timestamp) 
     events = pd.concat(frames, ignore_index=True)
     # Inclusive: the seed's last day may be partial (an export pulled
     # mid-day), and a same-day collision is settled by source_rank anyway.
-    events = events[events['effective_date'] >= seed_end_date]
+    after_seed = events['effective_date'] >= seed_end_date
+    tej_covered = pd.Series(
+        [key in tej_keys for key in zip(events['warrant_id'], events['warrant_name'])],
+        index=events.index,
+    )
+    events = events[after_seed | ~tej_covered]
     events['source'] = 'mops_strike'
     events['source_rank'] = 3
-    print(f'MOPS strike events from {seed_end_date.date()}: {len(events):,}')
+    print(f'MOPS strike events: {int(after_seed.sum()):,} from {seed_end_date.date()},'
+          f' {int((~after_seed & ~tej_covered).sum()):,} earlier for warrants outside TEJ')
     return events
 
 
@@ -480,8 +493,9 @@ def build_history(cache_directory: Path, dim_warrant: pd.DataFrame) -> pd.DataFr
         print(f'WARNING: no {TEJ_ADJUSTMENT_GLOB} in the TEJ seed dir'
               ' -- history will be MOPS-only (~5% coverage)')
 
+    tej_keys = set(zip(frames[0]['warrant_id'], frames[0]['warrant_name'])) if frames else set()
     frames.append(events_from_announcements(cache_directory))
-    frames.append(events_from_mops_strike(cache_directory, seed_end_date))
+    frames.append(events_from_mops_strike(cache_directory, seed_end_date, tej_keys))
 
     events = pd.concat([frame for frame in frames if len(frame)], ignore_index=True)
     for column in STATE_COLUMNS:
