@@ -23,7 +23,9 @@ RESOURCE_NAMES = [
     'warrant_basic_info',
     'warrant_active_snapshot',
     'warrant_strike_ratio_adjustment',
+    'warrant_pending_adjustment',
     'warrant_strike_ratio_reset',
+    'warrant_pending_reset',
     'warrant_announcement',
 ]
 

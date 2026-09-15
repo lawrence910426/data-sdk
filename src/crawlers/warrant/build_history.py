@@ -132,8 +132,18 @@ def events_from_mops_strike(
     extendable ones, MOPS-only listings), whose only strike history is here.
     """
     frames = []
-    adjustment = load_raw_table(cache_directory, 'warrant_strike_ratio_adjustment')
-    if adjustment is not None:
+    # Announced but not yet in force rows carry their own 生效日, which is what
+    # keeps the change off the days before it (see the resource's docstring).
+    adjustment_tables = [
+        table
+        for table in (
+            load_raw_table(cache_directory, 'warrant_strike_ratio_adjustment'),
+            load_raw_table(cache_directory, 'warrant_pending_adjustment'),
+        )
+        if table is not None
+    ]
+    adjustment = pd.concat(adjustment_tables, ignore_index=True) if adjustment_tables else None
+    if adjustment is not None and len(adjustment):
         adjustment = add_warrant_key(adjustment, 'warrant_id', 'warrant_name')
         frames.append(pd.DataFrame({
             'warrant_id': adjustment['warrant_id'],
@@ -146,8 +156,16 @@ def events_from_mops_strike(
             'floor': adjustment.get('latest_floor'),
             'event_type': 'adjustment',
         }))
-    reset = load_raw_table(cache_directory, 'warrant_strike_ratio_reset')
-    if reset is not None:
+    reset_tables = [
+        table
+        for table in (
+            load_raw_table(cache_directory, 'warrant_strike_ratio_reset'),
+            load_raw_table(cache_directory, 'warrant_pending_reset'),
+        )
+        if table is not None
+    ]
+    reset = pd.concat(reset_tables, ignore_index=True) if reset_tables else None
+    if reset is not None and len(reset):
         reset = add_warrant_key(reset, 'warrant_id', 'warrant_name')
         frames.append(pd.DataFrame({
             'warrant_id': reset['warrant_id'],
@@ -293,13 +311,39 @@ def scheduled_expiry_dates(cache_directory: Path, dim_warrant: pd.DataFrame) -> 
     )
 
 
-def events_from_dim(dim_warrant: pd.DataFrame, covered_keys: set[str]) -> pd.DataFrame:
+def first_priced_event(events: pd.DataFrame) -> pd.DataFrame:
+    """Per warrant, the earliest event carrying both a strike and a ratio."""
+    priced = events.dropna(subset=['strike', 'ratio', 'effective_date'])
+    priced = priced.sort_values(WARRANT_KEY + ['effective_date', 'sequence'])
+    return (
+        priced.groupby(WARRANT_KEY, as_index=False)
+        .head(1)[WARRANT_KEY + ['strike', 'ratio', 'effective_date']]
+        .rename(columns={
+            'strike': 'later_strike',
+            'ratio': 'later_ratio',
+            'effective_date': 'later_date',
+        })
+    )
+
+
+def events_from_dim(
+    dim_warrant: pd.DataFrame,
+    covered_keys: set[str],
+    other_events: pd.DataFrame,
+) -> pd.DataFrame:
     """Issuance rows for warrants no other source covers (rank 4).
 
     New listings crawled after the TEJ seed was frozen, plus the 2019 cohort
     that predates the seed window. ``original_strike`` is the issuance strike
-    and ``alloc_qty_per_1k / 1000`` the issuance ratio; for a warrant with no
-    later events these are also its final terms, so a single row is complete.
+    and ``alloc_qty_per_1k / 1000`` the issuance ratio.
+
+    ``t90sb01`` publishes only the *latest* allocation, so on a warrant that
+    has been adjusted since it listed that ratio is not the one it issued
+    with. An ex-rights adjustment conserves ``strike x ratio``, so where a
+    later event is known the issuance ratio is backed out from it instead
+    (``strike' x ratio' / original_strike``); ``validate`` measures how well
+    the invariant holds. A warrant with no later event keeps the published
+    allocation, which for it is both the issuance and the current ratio.
     """
     is_covered = [
         key in covered_keys
@@ -319,8 +363,25 @@ def events_from_dim(dim_warrant: pd.DataFrame, covered_keys: set[str]) -> pd.Dat
     })
     events['source'] = 'dim_synthesised'
     events['source_rank'] = 4
-    print(f'synthesised issuance for uncovered warrants: {len(events):,}')
+
+    priced = first_priced_event(other_events)
+    events = events.merge(priced, on=WARRANT_KEY, how='left')
+    is_backed_out = (
+        events['later_strike'].notna()
+        & events['later_ratio'].notna()
+        & (events['strike'] > 0)
+        & (events['later_date'] > events['effective_date'])
+    )
+    events.loc[is_backed_out, 'ratio'] = (
+        events.loc[is_backed_out, 'later_strike']
+        * events.loc[is_backed_out, 'later_ratio']
+        / events.loc[is_backed_out, 'strike']
+    ).round(3)  # t90sb01 publishes the allocation as an integer per 1000 units
+    events = events.drop(columns=['later_strike', 'later_ratio', 'later_date'])
+    print(f'synthesised issuance for uncovered warrants: {len(events):,}'
+          f' ({int(is_backed_out.sum()):,} ratios backed out of a later event)')
     return events
+
 
 
 # TODO: MOPS's t90sb01 applies an ex-dividend adjustment a day before it takes
@@ -353,6 +414,11 @@ def events_from_snapshot_diff(
         WARRANT_KEY + ['latest_strike', 'alloc_qty_per_1k', 'exercise_end_date', 'last_trade_date']
     ]
     current_terms = current_terms.drop_duplicates(subset=WARRANT_KEY, keep='last')
+    # A warrant that has not listed yet is not trading on anything, and MOPS's
+    # snapshot carries a provisional strike for it; there is nothing to diff.
+    not_yet_listed = dim_warrant.loc[dim_warrant['list_date'] > crawl_date, WARRANT_KEY]
+    current_terms = current_terms.merge(not_yet_listed, on=WARRANT_KEY, how='left', indicator=True)
+    current_terms = current_terms[current_terms['_merge'] == 'left_only'].drop(columns=['_merge'])
 
     # The last known state per warrant, with expiry forward-filled the way
     # chain_events will do it: a strike-only event carries no expiry.
@@ -394,22 +460,28 @@ def events_from_snapshot_diff(
     # between its last trading day and expiry (t95sb02 rarely records those)
     # is exactly what its settlement terms then reflect.
     effective_date = pd.to_datetime(unexplained['exercise_end_date']).clip(upper=crawl_date)
+    # Restate only what moved. A warrant whose expiry changed still has the
+    # strike it had yesterday, and MOPS applies an ex-dividend adjustment to
+    # the snapshot a day early -- carrying that strike onto an expiry-only diff
+    # would date the adjustment a day before it is true.
+    terms_moved = (strike_moved | ratio_moved)[unexplained.index]
+    expiry_only = ~terms_moved
     diff_events = pd.DataFrame({
         'warrant_id': unexplained['warrant_id'],
         'warrant_name': unexplained['warrant_name'],
         'effective_date': effective_date.fillna(crawl_date),
         'sequence': 9,
-        'strike': unexplained['latest_strike'],
-        'ratio': unexplained['snapshot_ratio'],
-        'exercise_end_date': unexplained['exercise_end_date'],
-        'last_trade_date': pd.to_datetime(unexplained['last_trade_date']),
+        'strike': unexplained['latest_strike'].where(terms_moved),
+        'ratio': unexplained['snapshot_ratio'].where(terms_moved),
+        'exercise_end_date': unexplained['exercise_end_date'].where(expiry_moved[unexplained.index]),
+        'last_trade_date': pd.to_datetime(unexplained['last_trade_date']).where(expiry_moved[unexplained.index]),
         'event_type': 'snapshot_diff',
     })
     diff_events['source'] = 'mops_snapshot'
     diff_events['source_rank'] = 5
-    expiry_only = int((expiry_moved & ~strike_moved & ~ratio_moved).sum())
+    expiry_only_count = int(expiry_only.sum())
     print(f'snapshot diffs no event explained: {len(diff_events):,}'
-          f' ({expiry_only:,} expiry only;'
+          f' ({expiry_only_count:,} expiry only;'
           f' {int((effective_date < crawl_date).sum()):,} on an already-expired warrant, dated at its expiry)')
     return diff_events
 
@@ -504,7 +576,28 @@ def chain_events(
     history = events.merge(
         dim_warrant[WARRANT_KEY + STATIC_COLUMNS], on=WARRANT_KEY, how='left'
     )
-    history['is_current'] = ~history.duplicated(subset=WARRANT_KEY, keep='last')
+    # "Current" means in force today, not the last row: an adjustment announced
+    # for a future date sits in the table with that date, and until it arrives
+    # the terms that trade are the ones before it.
+    today = pd.Timestamp.today().normalize()
+    in_force = history['effective_date'].isna() | (history['effective_date'] <= today)
+    current_rows = history[in_force].groupby(WARRANT_KEY, sort=False).tail(1).index
+    # A warrant that lists tomorrow has no row in force yet, and every warrant
+    # must have exactly one: give it its issuance row. That is also what the
+    # exchange publishes for an unlisted warrant -- a reset or an adjustment
+    # dated on the listing day has not happened yet either.
+    not_yet_listed = ~history[WARRANT_KEY].agg(tuple, axis=1).isin(
+        set(map(tuple, history.loc[current_rows, WARRANT_KEY].values))
+    )
+    current_rows = current_rows.union(
+        history[not_yet_listed].groupby(WARRANT_KEY, sort=False).head(1).index
+    )
+    history['is_current'] = history.index.isin(current_rows)
+    pending = int((~in_force).sum())
+    if pending:
+        print(f'rows effective after today: {pending:,}'
+              f' ({int(not_yet_listed.groupby([history["warrant_id"], history["warrant_name"]]).any().sum()):,}'
+              ' warrants not yet listed)')
     return history
 
 
@@ -551,8 +644,13 @@ def build_history(cache_directory: Path, dim_warrant: pd.DataFrame) -> pd.DataFr
         if column not in events.columns:
             events[column] = pd.NA
 
-    covered_keys = set(zip(events['warrant_id'], events['warrant_name']))
-    events = pd.concat([events, events_from_dim(dim_warrant, covered_keys)], ignore_index=True)
+    # An adjustment announced for a future date does not stand in for the
+    # issuance row of a warrant that listed after the TEJ seed ended -- without
+    # it such a warrant would have nothing but a row that is not in force yet.
+    today = pd.Timestamp.today().normalize()
+    in_force = events['effective_date'].isna() | (events['effective_date'] <= today)
+    covered_keys = set(zip(events.loc[in_force, 'warrant_id'], events.loc[in_force, 'warrant_name']))
+    events = pd.concat([events, events_from_dim(dim_warrant, covered_keys, events)], ignore_index=True)
     scheduled_expiry = scheduled_expiry_dates(cache_directory, dim_warrant)
     events = pd.concat(
         [events, events_from_snapshot_diff(cache_directory, dim_warrant, events, scheduled_expiry)],

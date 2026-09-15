@@ -4,7 +4,9 @@
 |---|---|---|---|
 | 權證基本資料彙總表 | ``t90sb01`` | ``warrant_basic_info`` | ``exercise_end_date`` |
 | 履約價格及行使比例調整公告彙總表 | ``t95sb02`` | ``warrant_strike_ratio_adjustment`` | ``adjustment_effective_date`` |
+| 同上，生效日尚未到 | ``t95sb02`` | ``warrant_pending_adjustment`` | 無（整份替換） |
 | 履約價格／履約點數重設公告彙總表 | ``t95sb03`` | ``warrant_strike_ratio_reset`` | ``reset_effective_date`` |
+| 同上，生效日尚未到 | ``t95sb03`` | ``warrant_pending_reset`` | 無（整份替換） |
 
 Column names follow the original ``common/warrant_basic_crawler`` vocabulary
 (``type``, ``latest_strike``, ``alloc_qty_per_1k``, …) so the basic-info table
@@ -48,6 +50,11 @@ HISTORY_START_YEAR = 2003          # MOPS t90sb01 delisted data goes back to ~RO
 EARLIEST_CURSOR_DATE = datetime.date(2003, 1, 1)
 MARKET_CODES = ((1, 'twse'), (2, 'otc'))
 RESULT_PAGE_SIZE = 1000            # MOPS returns 1000 rows/page; a short page is the last one
+PENDING_ADJUSTMENT_WINDOW_DAYS = 45  # how far ahead to read not-yet-effective t95sb02 rows
+# Each event report is published twice, once per market; both must be read or
+# every OTC warrant's strike history is missing (it was, until 2026-09-15).
+ADJUSTMENT_ENDPOINTS = ('ajax_t95sb02', 'ajax_o_t95sb02')
+RESET_ENDPOINTS = ('ajax_t95sb03', 'ajax_o_t95sb03')
 MAX_RESULT_PAGES = 1000            # pagination safety cap (a busy year is ~55 pages)
 
 # MOPS renders blanks as these tokens; pandas decodes &nbsp; to a literal '\xa0'.
@@ -578,17 +585,104 @@ def strike_ratio_adjustment_resource(
     today = datetime.date.today()
     if adjustment_effective_date.last_value > today:
         return
-    yield crawl_event_report(
-        session,
-        'ajax_t95sb02',
-        ADJUSTMENT_CAPPED_COLUMNS,
-        ADJUSTMENT_UNCAPPED_COLUMNS,
-        'adjustment_effective_date',
+    # One yield for both markets: a second yield is filtered against the cursor
+    # the first one already advanced, which silently drops the OTC history.
+    yield [
+        record
+        for ajax_endpoint in ADJUSTMENT_ENDPOINTS
+        for record in crawl_event_report(
+            session,
+            ajax_endpoint,
+            ADJUSTMENT_CAPPED_COLUMNS,
+            ADJUSTMENT_UNCAPPED_COLUMNS,
+            'adjustment_effective_date',
+            ADJUSTMENT_NUMERIC_COLUMNS,
+            adjustment_effective_date.last_value,
+            today,
+            request_delay_seconds,
+        )
+    ]
+
+
+@dlt.resource(
+    name='warrant_pending_adjustment',
+    write_disposition='replace',
+    columns=column_type_hints(
+        ADJUSTMENT_CAPPED_COLUMNS + ['has_cap_floor'],
         ADJUSTMENT_NUMERIC_COLUMNS,
-        adjustment_effective_date.last_value,
-        today,
-        request_delay_seconds,
-    )
+        ['adjustment_effective_date', 'exercise_end_date'],
+        ['has_cap_floor'],
+    ),
+)
+def pending_adjustment_resource(
+    session: requests.Session,
+    request_delay_seconds: float = DEFAULT_REQUEST_DELAY_SECONDS,
+):
+    """t95sb02 rows whose 生效日 is still in the future, replaced whole each run.
+
+    An ex-dividend adjustment is published days ahead of the date it takes
+    effect, and ``t90sb01``'s snapshot applies it a day early -- so without
+    these rows the history learns of the change only from a snapshot diff
+    dated at the crawl, a day before it is true (1,416 TSMC warrants on
+    2026-09-15, the eve of its ex-dividend). They carry their own 生效日, so
+    the history gets the real date.
+
+    Kept out of :func:`strike_ratio_adjustment_resource` because its cursor
+    would advance past today and then block every later run. This table is
+    replaced whole instead: a row here is provisional until its date arrives,
+    after which the incremental resource records it as history.
+    """
+    today = datetime.date.today()
+    for ajax_endpoint in ADJUSTMENT_ENDPOINTS:
+        yield crawl_event_report(
+            session,
+            ajax_endpoint,
+            ADJUSTMENT_CAPPED_COLUMNS,
+            ADJUSTMENT_UNCAPPED_COLUMNS,
+            'adjustment_effective_date',
+            ADJUSTMENT_NUMERIC_COLUMNS,
+            today + datetime.timedelta(days=1),
+            today + datetime.timedelta(days=PENDING_ADJUSTMENT_WINDOW_DAYS),
+            request_delay_seconds,
+        )
+
+
+@dlt.resource(
+    name='warrant_pending_reset',
+    write_disposition='replace',
+    columns=column_type_hints(
+        RESET_CAPPED_COLUMNS + ['has_cap_floor'],
+        RESET_NUMERIC_COLUMNS,
+        ['reset_effective_date', 'exercise_end_date'],
+        ['has_cap_floor'],
+    ),
+)
+def pending_reset_resource(
+    session: requests.Session,
+    request_delay_seconds: float = DEFAULT_REQUEST_DELAY_SECONDS,
+):
+    """t95sb03 rows whose 生效日 is still in the future, replaced whole each run.
+
+    A reset-type warrant fixes its provisional strike on its listing day, and
+    the reset is published the day before -- so on the eve of a listing MOPS
+    and the exchange already show the reset strike while ``t90sb01``'s
+    ``original_strike`` is still the provisional one. Same treatment as
+    :func:`pending_adjustment_resource`, and the same reason for keeping it out
+    of the cursored resource.
+    """
+    today = datetime.date.today()
+    for ajax_endpoint in RESET_ENDPOINTS:
+        yield crawl_event_report(
+            session,
+            ajax_endpoint,
+            RESET_CAPPED_COLUMNS,
+            RESET_UNCAPPED_COLUMNS,
+            'reset_effective_date',
+            RESET_NUMERIC_COLUMNS,
+            today + datetime.timedelta(days=1),
+            today + datetime.timedelta(days=PENDING_ADJUSTMENT_WINDOW_DAYS),
+            request_delay_seconds,
+        )
 
 
 @dlt.resource(
@@ -613,17 +707,22 @@ def strike_ratio_reset_resource(
     today = datetime.date.today()
     if reset_effective_date.last_value > today:
         return
-    yield crawl_event_report(
-        session,
-        'ajax_t95sb03',
-        RESET_CAPPED_COLUMNS,
-        RESET_UNCAPPED_COLUMNS,
-        'reset_effective_date',
-        RESET_NUMERIC_COLUMNS,
-        reset_effective_date.last_value,
-        today,
-        request_delay_seconds,
-    )
+    # One yield for both markets; see strike_ratio_adjustment_resource.
+    yield [
+        record
+        for ajax_endpoint in RESET_ENDPOINTS
+        for record in crawl_event_report(
+            session,
+            ajax_endpoint,
+            RESET_CAPPED_COLUMNS,
+            RESET_UNCAPPED_COLUMNS,
+            'reset_effective_date',
+            RESET_NUMERIC_COLUMNS,
+            reset_effective_date.last_value,
+            today,
+            request_delay_seconds,
+        )
+    ]
 
 
 # ── t95sb01: issuer announcements ────────────────────────────────────────────
@@ -773,6 +872,8 @@ def warrant_reports_source(
         warrant_basic_info_resource(session, history_start_year, history_end_year, request_delay_seconds),
         warrant_active_snapshot_resource(session, request_delay_seconds),
         strike_ratio_adjustment_resource(session, request_delay_seconds),
+        pending_adjustment_resource(session, request_delay_seconds),
         strike_ratio_reset_resource(session, request_delay_seconds),
+        pending_reset_resource(session, request_delay_seconds),
         warrant_announcement_resource(session, request_delay_seconds),
     ]

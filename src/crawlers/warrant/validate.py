@@ -199,7 +199,12 @@ def check_curated_layer(cache_directory: Path) -> None:
            f'{int((~tradable_before_expiry).sum()):,} violations'
            f' ({len(history) - len(with_last_trade):,} rows without one: 2003-04 MOPS blanks)')
 
-    current = history[history['is_current']].merge(
+    # The last row per warrant, which may be an adjustment not yet in force:
+    # the dimension's latest_strike comes from MOPS's snapshot, and MOPS applies
+    # an ex-dividend adjustment a day early, so the two agree on the final row
+    # rather than on is_current.
+    history = history.sort_values(WARRANT_KEY + ['effective_date', 'sequence'], na_position='first')
+    current = history.groupby(WARRANT_KEY, sort=False).tail(1).merge(
         dimension[WARRANT_KEY + ['latest_strike', 'alloc_qty_per_1k', 'exercise_end_date']],
         on=WARRANT_KEY,
         suffixes=('', '_dim'),
