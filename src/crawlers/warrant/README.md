@@ -15,8 +15,10 @@ bull/bear), 967,616 history rows.
   mops_raw/mops_raw/            layer 0a — dlt crawl output
     warrant_basic_info/           t90sb01 expired warrants, incremental on exercise_end_date
     warrant_active_snapshot/      t90sb01 current view, replaced whole each run
-    warrant_strike_ratio_adjustment/   t95sb02, incremental
-    warrant_strike_ratio_reset/        t95sb03, incremental
+    warrant_strike_ratio_adjustment/   t95sb02 (both markets), incremental
+    warrant_pending_adjustment/        t95sb02 rows not yet in force, replaced whole each run
+    warrant_strike_ratio_reset/        t95sb03 (both markets), incremental
+    warrant_pending_reset/             t95sb03 rows not yet in force, replaced whole each run
     warrant_announcement/         t95sb01 + o_t95sb01, incremental
   mops_pipeline_state/          dlt cursors
   warrant_basic_info.parquet    layer 1 — one row per warrant, current terms
@@ -189,10 +191,11 @@ identifier both vendors share.
   delisting (健亞, 2026-07) is announced under a type the announcement resource
   does not read. The snapshot diff catches the new expiry, dated at the crawl
   or at the expiry itself if already past -- the announcement date is lost.
-- **MOPS applies an adjustment a day early**: t90sb01 shows the post-ex-dividend
-  strike the day before it takes effect, so a `snapshot_diff` on such a day is
-  dated a day early. TODO: reference the exchange OpenAPI snapshot instead and
-  take t95sb02's future-effective rows for the true dates.
+- **`is_current` is as of the build**, on the Taiwan date the build ran. A row
+  effective after that (an adjustment announced for a coming ex-dividend date,
+  a reset on a listing still to come) is in the table but not current until
+  the next nightly build. For "today" at query time use
+  `get_warrant_history(as_of=...)`, which is evaluated when called.
 - **Publisher timing**: MOPS and the exchange OpenAPI do not post an
   adjustment at the same moment -- either can be a day ahead of the other
   around an ex-dividend date. `verify_openapi.py` fails on any mismatch and

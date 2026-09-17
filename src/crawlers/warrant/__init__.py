@@ -3,9 +3,11 @@
 Crawls TWSE MOPS into a raw layer, then builds a dimension table and an SCD2
 history that can be looked up as of any date. See README.md.
 """
+import datetime
 import glob
 import os
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 #: Built tables and the raw crawl live here, overridable with
 #: ``DATA_SDK_WARRANT_CACHE_PATH``. They are built once and read from every
@@ -62,3 +64,10 @@ def find_tej_seed(pattern: str, seed_directory: Path | None = None) -> Path | No
 
 def find_finmind_seed(pattern: str = FINMIND_SUMMARY_GLOB, seed_directory: Path | None = None) -> Path | None:
     return find_seed(pattern, finmind_seed_directory(seed_directory))
+
+
+def taiwan_today() -> datetime.date:
+    """The trading calendar's date. Every date in this package is a Taiwan date,
+    and the box runs UTC: the daily run at 16:00 UTC is already the next day in
+    Taipei, and a reset or adjustment effective that day is in force."""
+    return datetime.datetime.now(ZoneInfo('Asia/Taipei')).date()

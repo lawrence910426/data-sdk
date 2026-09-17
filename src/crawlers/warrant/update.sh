@@ -32,7 +32,9 @@ DAILY_RESOURCES=(
     warrant_active_snapshot
     warrant_announcement
     warrant_strike_ratio_adjustment
+    warrant_pending_adjustment
     warrant_strike_ratio_reset
+    warrant_pending_reset
 )
 
 case "$MODE" in

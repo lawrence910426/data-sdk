@@ -39,6 +39,8 @@ import requests
 from bs4 import BeautifulSoup
 from dlt.sources.helpers.requests import Client
 
+from . import taiwan_today
+
 MOPS_BASE_URL = 'https://mopsov.twse.com.tw/mops/web/'
 MOPS_USER_AGENT = (
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
@@ -346,7 +348,7 @@ def warrant_basic_info_resource(
     discards the whole package when extraction fails, so one run per few
     years is what actually lands. The cursor carries over between runs.
     """
-    today = datetime.date.today()
+    today = taiwan_today()
     frames: list[pd.DataFrame] = []
 
     first_year = max(history_start_year, exercise_end_date.last_value.year)
@@ -395,7 +397,7 @@ def warrant_active_snapshot_resource(
     termination, extension or adjustment, and the only source of a listing
     until it expires and the delisted sweep picks it up.
     """
-    today = datetime.date.today()
+    today = taiwan_today()
     frames: list[pd.DataFrame] = []
     for market_code, market_name in MARKET_CODES:
         frame = crawl_basic_info_market(session, market_code, {}, request_delay_seconds)
@@ -582,7 +584,7 @@ def strike_ratio_adjustment_resource(
 ):
     """t95sb02 — one row per strike/ratio adjustment (driven by the
     underlying's ex-dividend/ex-rights/capital changes)."""
-    today = datetime.date.today()
+    today = taiwan_today()
     if adjustment_effective_date.last_value > today:
         return
     # One yield for both markets: a second yield is filtered against the cursor
@@ -632,7 +634,7 @@ def pending_adjustment_resource(
     replaced whole instead: a row here is provisional until its date arrives,
     after which the incremental resource records it as history.
     """
-    today = datetime.date.today()
+    today = taiwan_today()
     for ajax_endpoint in ADJUSTMENT_ENDPOINTS:
         yield crawl_event_report(
             session,
@@ -670,7 +672,7 @@ def pending_reset_resource(
     :func:`pending_adjustment_resource`, and the same reason for keeping it out
     of the cursored resource.
     """
-    today = datetime.date.today()
+    today = taiwan_today()
     for ajax_endpoint in RESET_ENDPOINTS:
         yield crawl_event_report(
             session,
@@ -704,7 +706,7 @@ def strike_ratio_reset_resource(
 ):
     """t95sb03 — reset-type warrants' provisional strike being finalized, once,
     on their own listing day."""
-    today = datetime.date.today()
+    today = taiwan_today()
     if reset_effective_date.last_value > today:
         return
     # One yield for both markets; see strike_ratio_adjustment_resource.
@@ -840,7 +842,7 @@ def warrant_announcement_resource(
     BSM needs the announcement date, not the new expiry, as the moment the
     market repriced.
     """
-    today = datetime.date.today()
+    today = taiwan_today()
     window_start = announcement_date.last_value
     if window_start > today:
         return

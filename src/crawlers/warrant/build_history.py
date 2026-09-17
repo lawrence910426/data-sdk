@@ -52,6 +52,7 @@ from . import (
     TEJ_BASIC_INFO_GLOB,
     cache_directory as cache_dir,
     find_tej_seed,
+    taiwan_today,
 )
 from .build_basic_info import WARRANT_KEY, add_warrant_key, load_raw_table
 
@@ -579,7 +580,7 @@ def chain_events(
     # "Current" means in force today, not the last row: an adjustment announced
     # for a future date sits in the table with that date, and until it arrives
     # the terms that trade are the ones before it.
-    today = pd.Timestamp.today().normalize()
+    today = pd.Timestamp(taiwan_today())
     in_force = history['effective_date'].isna() | (history['effective_date'] <= today)
     current_rows = history[in_force].groupby(WARRANT_KEY, sort=False).tail(1).index
     # A warrant that lists tomorrow has no row in force yet, and every warrant
@@ -644,12 +645,14 @@ def build_history(cache_directory: Path, dim_warrant: pd.DataFrame) -> pd.DataFr
         if column not in events.columns:
             events[column] = pd.NA
 
-    # An adjustment announced for a future date does not stand in for the
-    # issuance row of a warrant that listed after the TEJ seed ended -- without
-    # it such a warrant would have nothing but a row that is not in force yet.
-    today = pd.Timestamp.today().normalize()
-    in_force = events['effective_date'].isna() | (events['effective_date'] <= today)
-    covered_keys = set(zip(events.loc[in_force, 'warrant_id'], events.loc[in_force, 'warrant_name']))
+    # A warrant is covered when some event opens its life -- one dated on or
+    # before its list_date. An adjustment that arrived after listing (a warrant
+    # listed after the TEJ seed ended, or one whose first TEJ row is already a
+    # change) does not stand in for the issuance: without a synthesised one the
+    # days between listing and that adjustment would have no terms at all.
+    dated = events.merge(dim_warrant[WARRANT_KEY + ['list_date']], on=WARRANT_KEY, how='left')
+    opens_life = dated['list_date'].isna() | (dated['effective_date'] <= dated['list_date'])
+    covered_keys = set(zip(dated.loc[opens_life, 'warrant_id'], dated.loc[opens_life, 'warrant_name']))
     events = pd.concat([events, events_from_dim(dim_warrant, covered_keys, events)], ignore_index=True)
     scheduled_expiry = scheduled_expiry_dates(cache_directory, dim_warrant)
     events = pd.concat(
