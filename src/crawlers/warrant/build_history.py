@@ -645,14 +645,14 @@ def build_history(cache_directory: Path, dim_warrant: pd.DataFrame) -> pd.DataFr
         if column not in events.columns:
             events[column] = pd.NA
 
-    # A warrant is covered when some event opens its life -- one dated on or
-    # before its list_date. An adjustment that arrived after listing (a warrant
-    # listed after the TEJ seed ended, or one whose first TEJ row is already a
-    # change) does not stand in for the issuance: without a synthesised one the
-    # days between listing and that adjustment would have no terms at all.
-    dated = events.merge(dim_warrant[WARRANT_KEY + ['list_date']], on=WARRANT_KEY, how='left')
-    opens_life = dated['list_date'].isna() | (dated['effective_date'] <= dated['list_date'])
-    covered_keys = set(zip(dated.loc[opens_life, 'warrant_id'], dated.loc[opens_life, 'warrant_name']))
+    # Only an issuance event covers a warrant. A change or a reset describes a
+    # state the warrant moved to, not the one it was issued with, so without a
+    # synthesised issuance a warrant whose first known event is one of those --
+    # 2,011 whose first TEJ row is already a change, a listing-day reset on a
+    # warrant that listed after the TEJ seed ended -- would have no terms at
+    # all before it.
+    is_issuance = events['event_type'] == 'issuance'
+    covered_keys = set(zip(events.loc[is_issuance, 'warrant_id'], events.loc[is_issuance, 'warrant_name']))
     events = pd.concat([events, events_from_dim(dim_warrant, covered_keys, events)], ignore_index=True)
     scheduled_expiry = scheduled_expiry_dates(cache_directory, dim_warrant)
     events = pd.concat(
