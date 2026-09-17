@@ -41,7 +41,6 @@ LAST_TRADE_FIELD = '最後交易日'
 
 STRIKE_TOLERANCE = 0.01
 RATIO_TOLERANCE = 1e-4
-MINIMUM_MATCH_RATE = 0.98
 
 
 def parse_republic_yyyymmdd(raw_value: object) -> pd.Timestamp:
@@ -113,7 +112,7 @@ def fetch_openapi_terms() -> pd.DataFrame:
 
 
 def report(label: str, match_rate: float, matched: int, total: int) -> bool:
-    passed = match_rate >= MINIMUM_MATCH_RATE
+    passed = matched == total
     print(f'  [{"PASS" if passed else "FAIL"}] {label} — {match_rate:.2%} ({matched:,}/{total:,})')
     return passed
 
