@@ -30,6 +30,39 @@ THIN_FRACTION = 0.4
 # Guards against certifying a day against a truncated universe.
 MIN_EXPECTED = 1200
 
+MIN_EXPECTED_WARRANTS = 5000
+MAX_MISSING_WARRANT_FRACTION = 0.01
+
+# Warrant code ranges, from TWSE's warrant FAQ and TPEx's 上櫃權證簡介:
+# calls are 6 digits, every other kind is 5 digits plus a letter
+# (P/U/T domestic put, F foreign call, Q foreign put, C/X bull, B/Y bear).
+_WARRANT_LETTERS = frozenset("PUTFQCBXY")
+_CALL_RANGES = (
+    (30001, 89999),      # TWSE 030001-089999
+    (700000, 739999),    # TPEx 700000-739999
+)
+_LETTERED_RANGES = (
+    (3001, 8999),        # TWSE 03001x-08999x
+    (70000, 73999),      # TPEx 70000x-73999x
+)
+
+
+def is_warrant_code(code):
+    """Whether ``code`` lies in a TWSE or TPEx warrant code range."""
+    code = str(code)
+    if len(code) != 6 or not code[:5].isdigit():
+        return False
+    last = code[5]
+    if last.isdigit():
+        number = int(code)
+        ranges = _CALL_RANGES
+    elif last in _WARRANT_LETTERS:
+        number = int(code[:5])
+        ranges = _LETTERED_RANGES
+    else:
+        return False
+    return any(low <= number <= high for low, high in ranges)
+
 _INDEX_INDUSTRIES = {"大盤", "Index", "所有證券"}
 _INDEX_IDS = {"TAIEX", "TPEx"}
 
@@ -94,27 +127,54 @@ class FinMindWrapper:
         return output_dir
 
     @staticmethod
-    def broker_day_path(day, output_dir=None):
-        return os.path.join(output_dir or FinMindWrapper.broker_dir(), f"{day}.parquet")
+    def warrant_broker_dir():
+        output_dir = os.environ.get("DATA_SDK_FINMIND_BROKER_WARRANT_PATH")
+        if not output_dir:
+            print(
+                "Warning: DATA_SDK_FINMIND_BROKER_WARRANT_PATH not set. Using current directory.",
+                file=sys.stderr,
+            )
+            output_dir = "."
+        return output_dir
+
+    @staticmethod
+    def broker_day_path(day, output_dir=None, warrant=False):
+        """One day's archive file, ``{dir}/{day}.parquet``, in the stock archive
+        (``DATA_SDK_FINMIND_BROKER_PATH``) or the warrant archive
+        (``DATA_SDK_FINMIND_BROKER_WARRANT_PATH``)."""
+        if output_dir is None:
+            output_dir = FinMindWrapper.warrant_broker_dir() if warrant else FinMindWrapper.broker_dir()
+        return os.path.join(output_dir, f"{day}.parquet")
 
     # ------------------------------------------------------------------
     # Read surface -- pure. Never downloads, never writes.
     # ------------------------------------------------------------------
 
-    def get_broker(self, day, sid):
-        """Broker rows for ``(day, sid)`` from the archive.
+    def get_broker(self, day, sid=None, trader_id=None, warrant=False):
+        """Broker rows for ``day`` from the archive, filtered by ``sid`` (one
+        instrument, every branch) and/or ``trader_id`` (one branch, every
+        instrument); neither filter returns the whole day.
+
+        ``warrant=True`` reads the warrant archive
+        (``DATA_SDK_FINMIND_BROKER_WARRANT_PATH``), whose rows have the same
+        columns with warrant codes in ``stock_id``.
 
         Reads never download: the archive is filled by the scheduled writer,
         and a missing day raises instead of costing a whole-day fetch here.
         """
-        path = self.broker_day_path(day)
+        path = self.broker_day_path(day, warrant=warrant)
         self._require_day_file(day, path)
-        out = pd.read_parquet(path, filters=[("stock_id", "==", str(sid))])
+        filters = []
+        if sid is not None:
+            filters.append(("stock_id", "==", str(sid)))
+        if trader_id is not None:
+            filters.append(("securities_trader_id", "==", str(trader_id)))
+        out = pd.read_parquet(path, filters=filters or None)
         return out.reset_index(drop=True)
 
-    def get_broker_day(self, day, sids=None, columns=None):
+    def get_broker_day(self, day, sids=None, columns=None, warrant=False):
         """Whole-day broker rows, optionally projected and filtered."""
-        path = self.broker_day_path(day)
+        path = self.broker_day_path(day, warrant=warrant)
         self._require_day_file(day, path)
         filters = None
         if sids is not None:
@@ -124,9 +184,10 @@ class FinMindWrapper:
         )
         return out.reset_index(drop=True)
 
-    def archived_stock_ids(self, day, output_dir=None):
-        """Distinct stock ids already stored for ``day``; empty set if absent."""
-        path = self.broker_day_path(day, output_dir)
+    def archived_stock_ids(self, day, output_dir=None, warrant=False):
+        """Distinct stock (or warrant) ids already stored for ``day``; empty set
+        if absent."""
+        path = self.broker_day_path(day, output_dir, warrant=warrant)
         if not os.path.isfile(path) or os.path.getsize(path) == 0:
             return set()
         frame = pd.read_parquet(path, columns=["stock_id"])
@@ -192,6 +253,19 @@ class FinMindWrapper:
             prices[prices["Trading_Volume"] > 0]["stock_id"].astype(str)
         )
         return traded & self._listed_stock_ids()
+
+    def get_traded_warrant_ids(self, day):
+        """Warrant codes that traded on ``day`` (volume > 0). One request, on the
+        same daily-price dataset as :meth:`get_traded_stock_ids`; warrants are
+        recognised by the exchanges' code ranges, see :func:`is_warrant_code`."""
+        self.limiter().acquire(1)
+        prices = FinMindWrapper._api.taiwan_stock_daily(
+            start_date=day, end_date=day
+        )
+        if prices is None or prices.empty:
+            return set()
+        traded = prices[prices["Trading_Volume"] > 0]["stock_id"].astype(str)
+        return {code for code in traded if is_warrant_code(code)}
 
     def _listed_stock_ids(self):
         """Real twse/tpex equities, memoised for the process."""
@@ -282,6 +356,40 @@ class FinMindWrapper:
         )
         return (0 if frame is None or frame.empty else len(frame)), 1
 
+    def fetch_warrant_day(self, day, verify=True):
+        """Fetch the whole market's warrant branch report for ``day`` in one
+        request (sponsor-tier storage object, FinMind >= 2.0.10).
+
+        Complete only if dated ``day``, holding at least ``MIN_EXPECTED_WARRANTS``
+        warrants and, with ``verify``, covering the day's traded warrants.
+        """
+        self.limiter().acquire(1)
+        frame = FinMindWrapper._api.taiwan_stock_warrant_trading_daily_report(
+            date=day, use_object=True
+        )
+        spent = 1
+        if frame is None or frame.empty:
+            return BrokerFetchResult(self._empty_frame(), set(), set(), {day}, spent)
+        frame = frame.copy()
+        frame["stock_id"] = frame["stock_id"].astype(str)
+        received = set(frame["stock_id"])
+
+        dated = frame["date"].astype(str) == day
+        too_few = len(received) < MIN_EXPECTED_WARRANTS
+        if not dated.all() or too_few:
+            return BrokerFetchResult(frame, received, set(), {day}, spent)
+        if not verify:
+            return BrokerFetchResult(frame, received, set(), set(), spent)
+
+        traded = self.get_traded_warrant_ids(day)
+        spent += 1
+        missing = traded - received
+        tolerated = len(traded) * MAX_MISSING_WARRANT_FRACTION
+        if len(missing) > tolerated:
+            return BrokerFetchResult(frame, received, set(), missing, spent)
+        # Within tolerance: the few traded-but-absent codes are odd-lot-only days.
+        return BrokerFetchResult(frame, received, missing, set(), spent)
+
     @staticmethod
     def _empty_frame():
         return pd.DataFrame({c: pd.Series(dtype="object") for c in BROKER_COLUMNS})
@@ -290,13 +398,15 @@ class FinMindWrapper:
     # Write surface -- the only writer of the archive.
     # ------------------------------------------------------------------
 
-    def write_broker_day(self, day, df, output_dir=None):
-        """Deduplicate and atomically publish one day of broker rows.
+    def write_broker_day(self, day, df, output_dir=None, warrant=False):
+        """Deduplicate and atomically publish one day of broker rows
+        (``warrant=True``: into the warrant archive).
 
         Upstream can serve duplicated rows; a net position sums buy - sell
         per branch, so duplicates are dropped once here, not by every reader.
         """
-        output_dir = output_dir or self.broker_dir()
+        if output_dir is None:
+            output_dir = self.warrant_broker_dir() if warrant else self.broker_dir()
         os.makedirs(output_dir, exist_ok=True)
         path = os.path.join(output_dir, f"{day}.parquet")
 
@@ -306,6 +416,10 @@ class FinMindWrapper:
                 raise ValueError(f"broker frame for {day} is missing column {column}")
         frame = frame[BROKER_COLUMNS]
         frame["stock_id"] = frame["stock_id"].astype(str)
+        # Pin the share counts too: the storage object serves int32, the per-stock
+        # endpoint int64, and a multi-day scan needs one type.
+        for column in ("buy", "sell"):
+            frame[column] = frame[column].astype("int64")
         frame = frame.drop_duplicates().reset_index(drop=True)
 
         table = pa.Table.from_pandas(frame, preserve_index=False)
