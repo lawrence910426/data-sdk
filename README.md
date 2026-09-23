@@ -70,17 +70,27 @@ Set the following environment variables to configure the SDK:
 
 ### Cache Storage Paths
 These variables govern where downloaded data is cached and read from.
-If not set, they default to the current working directory, except
-`DATA_SDK_TEJ_CACHE_PATH`, which defaults to `/mnt/nfs/backup/tej_cache`.
+The first four default to the current working directory if unset; the rest
+default to the `/mnt/nfs/backup/...` paths shown.
 
 ```bash
+# default to the current working directory if unset
 export DATA_SDK_FINMIND_BROKER_PATH="/mnt/nfs/backup/finmind_broker"
 export DATA_SDK_FINMIND_BROKER_WARRANT_PATH="/mnt/nfs/backup/finmind_broker/warrant_daily"
 export DATA_SDK_SHIOAJI_TICKS_PATH="/mnt/nfs/backup/shioaji_ticks"
 export DATA_SDK_SHIOAJI_FUTURES_TICKS_PATH="/mnt/nfs/backup/shioaji_futures_ticks"
 export DATA_SDK_ORDER_BOOK_PARQUET_PATH="/mnt/nfs/backup/parquets"
+
+# default to these paths if unset
 export DATA_SDK_TEJ_CACHE_PATH="/mnt/nfs/backup/tej_cache"
-export DATA_SDK_FOP_PARQUET_PATH="/mnt/nfs/backup/fop_parquets"  # defaults to this path if unset
+export DATA_SDK_FOP_PARQUET_PATH="/mnt/nfs/backup/fop_parquets"
+
+# warrant crawler related paths (default to these paths if unset)
+export DATA_SDK_WARRANT_CACHE_PATH="/mnt/nfs/backup/warrant_history"
+export DATA_SDK_TEJ_WARRANTS_PATH="/mnt/nfs/backup/tej_warrants"
+export DATA_SDK_FINMIND_WARRANTS_PATH="/mnt/nfs/backup/finmind_warrants"
+
+#TODO: the default behaviors should be consistent repowide
 ```
 
 ### API Keys

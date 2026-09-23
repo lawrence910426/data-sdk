@@ -6,3 +6,9 @@ FinMind
 shioaji
 requests
 tejapi
+
+# data_sdk.crawlers.warrant
+dlt
+beautifulsoup4
+lxml
+pyarrow
