@@ -75,6 +75,7 @@ If not set, they default to the current working directory, except
 
 ```bash
 export DATA_SDK_FINMIND_BROKER_PATH="/mnt/nfs/backup/finmind_broker"
+export DATA_SDK_FINMIND_BROKER_WARRANT_PATH="/mnt/nfs/backup/finmind_broker/warrant_daily"
 export DATA_SDK_SHIOAJI_TICKS_PATH="/mnt/nfs/backup/shioaji_ticks"
 export DATA_SDK_SHIOAJI_FUTURES_TICKS_PATH="/mnt/nfs/backup/shioaji_futures_ticks"
 export DATA_SDK_ORDER_BOOK_PARQUET_PATH="/mnt/nfs/backup/parquets"
@@ -133,6 +134,20 @@ missing = expected - finmind.archived_stock_ids("2024-01-02")
 result = finmind.fetch_broker_cells("2024-01-02", missing)
 if result.complete:
     finmind.write_broker_day("2024-01-02", result.frame)
+
+# Warrant branch report (TaiwanStockWarrantTradingDailyReport, from 2023-06-21):
+# same layout and columns, one file per day under DATA_SDK_FINMIND_BROKER_WARRANT_PATH.
+# Reads are pure; filter by warrant code and/or branch code.
+wide = finmind.get_broker("2026-08-06", sid="700448", warrant=True)      # one warrant, every branch
+desk = finmind.get_broker("2026-08-06", trader_id="9227", warrant=True)  # one branch, every warrant
+day  = finmind.get_broker_day("2026-08-06", warrant=True)
+
+# Filling it: the sponsor-tier whole-day storage object, one request per day,
+# accepted only when it is dated, not thin, and covers the warrants that traded.
+result = finmind.fetch_warrant_day("2026-08-06")
+if result.complete:
+    finmind.write_broker_day("2026-08-06", result.frame, warrant=True)
+
 
 # Get Shioaji order book data (downloads if missing)
 shioaji = ShioajiWrapper()
